@@ -1,0 +1,81 @@
+id,name,lat,lon,demand_kg,service_time_sec,priority,required
+1,MG Road Metro Plaza,12.98136,77.561351,60,90,1,True
+2,Brigade Road Commercial,12.952225,77.611153,110,60,1,True
+3,Church Street Market,12.977934,77.561825,30,90,3,True
+4,Commercial Street Junction,12.952886,77.601741,90,90,1,True
+5,Residency Road Food Court,12.986721,77.608693,75,90,2,True
+6,Lavelle Road Residences,12.968045,77.579073,130,60,1,True
+7,Richmond Town Market,12.989717,77.570776,75,120,1,True
+8,Ulsoor Lake Promenade,12.956051,77.574672,130,120,1,True
+9,Indiranagar 100ft Hub,12.943755,77.586195,60,120,3,True
+10,Domlur BDA Complex,12.978861,77.616099,110,150,2,True
+11,Old Airport Road Depot,12.974136,77.627718,75,60,1,True
+12,Koramangala 5th Block Hub,12.975243,77.617658,90,120,1,True
+13,Victoria Layout Community,12.977015,77.60892,30,90,1,True
+14,Ashok Nagar Community Bin,12.990715,77.628566,130,90,1,True
+15,Langford Town Point,12.997254,77.586209,75,120,2,True
+16,Shanthi Nagar Bus Terminal,12.947986,77.584469,110,120,1,True
+17,Austin Town Center,12.985727,77.607448,30,90,1,True
+18,Neelasandra Market,12.97399,77.576737,75,150,1,True
+19,Vasanth Nagar Circle,12.955496,77.624377,110,90,1,True
+20,Shivajinagar Bus Stand,12.984523,77.6186,130,60,2,True
+21,Frazer Town Bakery Street,12.952633,77.561847,60,150,1,True
+22,Cooke Town Park Bins,12.955342,77.574369,90,120,1,True
+23,Cox Town Market,12.951484,77.594546,110,150,1,True
+24,Halasuru Someshwara Gate,12.946601,77.569374,110,120,1,True
+25,Cambridge Layout Hub,12.988891,77.58959,90,150,2,True
+26,Murphy Town Market,12.96194,77.629413,45,150,3,True
+27,Tippasandra Main Bazaar,12.942964,77.562898,30,90,1,True
+28,Defence Colony Park,12.980521,77.615046,75,60,1,True
+29,Doopanahalli Community,12.963534,77.601312,75,120,1,True
+30,Kodihalli Cross,13.004575,77.619855,30,60,2,True
+31,Rustam Bagh Green Bin,12.98432,77.597188,60,120,1,True
+32,Airport Road Office Cluster,12.944409,77.590034,75,60,1,True
+33,Wind Tunnel Road Complex,13.003367,77.62091,60,90,1,True
+34,Ejipura Main Market,12.972138,77.567049,110,120,1,True
+35,Viveka Nagar Point,12.995517,77.595136,45,90,2,True
+36,Adugodi Police Quarters,12.962774,77.570908,130,60,1,True
+37,Tavarekere Junction,12.978526,77.593802,30,120,1,True
+38,Madiwala Market Point,12.998111,77.617817,60,90,1,True
+39,BTM 1st Stage Market,12.940655,77.621061,30,60,1,True
+40,Jayanagar 4th Block Complex,12.987834,77.616722,130,90,2,True
+41,South End Circle Hub,12.945587,77.59287,90,90,1,True
+42,Lalbagh West Gate Point,12.955154,77.62067,75,90,1,True
+43,Basavanagudi Gandhi Bazaar,13.001624,77.612469,110,90,1,True
+44,Bull Temple Road Bins,12.986506,77.587529,110,120,1,True
+45,Chamrajpet Market,12.967267,77.59583,30,90,2,True
+46,KR Market Wholesale Bins,12.952329,77.583266,90,90,3,True
+47,Chickpet Textile Hub,12.977791,77.560103,110,60,1,True
+48,Majestic Metro Concourse,12.952626,77.622979,130,120,1,True
+49,Gandhi Nagar Cinema Hub,12.94156,77.57626,110,150,1,True
+50,Seshadripuram College Point,12.951597,77.568862,90,150,2,True
+51,Malleshwaram 8th Cross,12.95361,77.592708,75,90,1,True
+52,Sampige Road Market,12.943203,77.605729,60,150,3,True
+53,Malleswaram Circle,12.965377,77.620069,30,60,1,True
+54,Sadashivanagar BDA Park,12.940843,77.610575,130,60,1,True
+55,Palace Guttahalli Point,12.954006,77.572915,75,90,2,True
+56,RT Nagar Post Office,12.966132,77.579098,45,60,1,True
+57,Ganga Nagar Market,12.967619,77.619894,90,60,1,True
+58,Hebbal Flyover Junction,12.940141,77.62955,130,60,1,True
+59,CBI Road Community,13.00443,77.624446,130,90,1,True
+60,Sanjay Nagar Main Road,12.948242,77.593595,45,150,2,True
+61,RMV 2nd Stage Point,12.999771,77.571125,30,150,1,True
+62,Mathikere Bus Stand,12.955164,77.614485,75,120,1,True
+63,Yeshwantpur Market Point,12.966211,77.626612,130,150,1,True
+64,Rajajinagar 1st Block,12.947436,77.58037,30,60,1,True
+65,Mahalakshmi Layout Point,12.988958,77.563602,90,150,2,True
+66,West of Chord Road Bins,12.9718,77.61929,45,60,1,True
+67,Vijayanagar Water Tank,13.003855,77.565208,45,60,1,True
+68,Attiguppe Metro Point,12.978252,77.606865,45,150,1,True
+69,RPC Layout Community,12.944992,77.62192,45,60,1,True
+70,Bapuji Nagar Point,12.979957,77.588946,90,120,2,True
+71,Goripalya Main Road,13.002029,77.573898,110,120,1,True
+72,Cottonpet Market Point,12.953308,77.587305,110,120,1,True
+73,City Market Skywalk,12.968606,77.624631,30,60,1,True
+74,Chamarajpet 5th Main,12.96868,77.629492,30,60,1,True
+75,Shankarapuram Point,12.974234,77.595012,45,120,2,True
+76,Hanumantha Nagar Hill,12.99826,77.621149,60,120,1,True
+77,NR Colony Park,12.947642,77.617962,110,120,1,True
+78,Thyagaraja Nagar Point,12.979417,77.628706,110,60,1,True
+79,Banashankari BDA Complex,12.98335,77.598422,110,60,1,True
+80,Girinagar Community Bin,13.002325,77.569,30,60,2,True
