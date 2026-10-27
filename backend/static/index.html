@@ -458,7 +458,7 @@
       font-size: 11px;
     }
 
-    /* Leaflet popup overrides */
+    /* Leaflet popup & control overrides */
     .leaflet-popup-content-wrapper {
       background: var(--bg-surface-elevated) !important;
       color: var(--text-main) !important;
@@ -468,6 +468,36 @@
     }
     .leaflet-popup-tip {
       background: var(--bg-surface-elevated) !important;
+    }
+    .leaflet-control-layers {
+      background: var(--glass-bg) !important;
+      backdrop-filter: var(--glass-blur) !important;
+      border: 1px solid var(--border-color) !important;
+      border-radius: 10px !important;
+      box-shadow: var(--shadow-lg) !important;
+      color: var(--text-main) !important;
+      padding: 8px 12px !important;
+      font-family: inherit !important;
+      font-size: 12px !important;
+    }
+    .leaflet-control-layers-separator {
+      border-top-color: var(--border-color) !important;
+    }
+    .leaflet-control-layers label {
+      color: var(--text-main) !important;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 4px 0;
+    }
+    .leaflet-bar a {
+      background-color: var(--bg-surface-elevated) !important;
+      color: var(--text-main) !important;
+      border-bottom: 1px solid var(--border-color) !important;
+    }
+    .leaflet-bar a:hover {
+      background-color: var(--border-hover) !important;
     }
 
     /* Notification Banner */
@@ -700,12 +730,38 @@
       // Add Zoom Control to bottom-right
       L.control.zoom({ position: 'bottomright' }).addTo(map);
 
-      // Dark theme tiles (CartoDB Dark Matter / Positron)
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-        subdomains: 'abcd',
-        maxZoom: 19
-      }).addTo(map);
+      // Real World Basemaps without any API key
+      const osmStandard = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+      });
+
+      const esriStreets = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+        maxZoom: 19,
+        attribution: 'Tiles &copy; Esri'
+      });
+
+      const esriSatellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        maxZoom: 19,
+        attribution: 'Tiles &copy; Esri Satellite'
+      });
+
+      // Default to real OpenStreetMap (No API key needed)
+      osmStandard.addTo(map);
+
+      // Basemap layer switcher (All 100% Free - No API Key Required)
+      const baseMaps = {
+        "🗺️ Real Street Map (OSM)": osmStandard,
+        "🏙️ Municipal Streets (Esri)": esriStreets,
+        "🛰️ Satellite View (Esri)": esriSatellite
+      };
+
+      const overlayMaps = {
+        "📍 Collection Points & Depot": markersLayer,
+        "🚛 Optimized Truck Routes": routesLayer
+      };
+
+      L.control.layers(baseMaps, overlayMaps, { position: 'topright' }).addTo(map);
 
       markersLayer.addTo(map);
       routesLayer.addTo(map);
