@@ -1,1365 +1,448 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>EcoRoute AI - Municipal Waste Collection Route Optimizer</title>
+  <title>EcoRoute AI — Municipal Waste Collection Route Optimizer (Pune Smart City)</title>
   
-  <!-- Google Fonts & Leaflet CSS -->
+  <!-- Inter Google Font -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- Leaflet CSS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
-  <!-- Lucide Icons -->
-  <script src="https://unpkg.com/lucide@latest"></script>
-
-  <style>
-    :root {
-      --bg-base: #090d16;
-      --bg-surface: #101726;
-      --bg-surface-elevated: #182238;
-      --border-color: rgba(255, 255, 255, 0.08);
-      --border-hover: rgba(255, 255, 255, 0.16);
-      
-      --accent-emerald: #10b981;
-      --accent-cyan: #06b6d4;
-      --accent-violet: #8b5cf6;
-      --accent-amber: #f59e0b;
-      --accent-rose: #f43f5e;
-      --accent-blue: #3b82f6;
-
-      --text-main: #f8fafc;
-      --text-muted: #94a3b8;
-      --text-dim: #64748b;
-
-      --shadow-lg: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
-      --glass-bg: rgba(16, 23, 38, 0.85);
-      --glass-blur: blur(12px);
-    }
-
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-
-    body {
-      font-family: 'Plus Jakarta Sans', sans-serif;
-      background-color: var(--bg-base);
-      color: var(--text-main);
-      overflow: hidden;
-      height: 100vh;
-      display: flex;
-      flex-direction: column;
-    }
-
-    /* Header */
-    header {
-      background: var(--glass-bg);
-      backdrop-filter: var(--glass-blur);
-      border-bottom: 1px solid var(--border-color);
-      height: 64px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 24px;
-      z-index: 1000;
-    }
-
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-
-    .brand-icon {
-      width: 40px;
-      height: 40px;
-      background: linear-gradient(135deg, #10b981, #06b6d4);
-      border-radius: 10px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: white;
-      font-weight: 800;
-      font-size: 20px;
-      box-shadow: 0 0 15px rgba(16, 185, 129, 0.4);
-    }
-
-    .brand-title {
-      font-size: 18px;
-      font-weight: 700;
-      letter-spacing: -0.02em;
-    }
-
-    .brand-subtitle {
-      font-size: 11px;
-      color: var(--text-muted);
-      font-weight: 500;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .badge-software {
-      background: rgba(16, 185, 129, 0.15);
-      color: var(--accent-emerald);
-      border: 1px solid rgba(16, 185, 129, 0.3);
-      padding: 2px 7px;
-      border-radius: 12px;
-      font-size: 10px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-
-    .header-actions {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 8px 16px;
-      border-radius: 8px;
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.2s ease;
-      border: none;
-      font-family: inherit;
-    }
-
-    .btn-primary {
-      background: linear-gradient(135deg, #10b981, #059669);
-      color: white;
-      box-shadow: 0 4px 14px rgba(16, 185, 129, 0.35);
-    }
-    .btn-primary:hover {
-      background: linear-gradient(135deg, #059669, #047857);
-      transform: translateY(-1px);
-    }
-
-    .btn-secondary {
-      background: var(--bg-surface-elevated);
-      color: var(--text-main);
-      border: 1px solid var(--border-color);
-    }
-    .btn-secondary:hover {
-      background: rgba(255, 255, 255, 0.05);
-      border-color: var(--border-hover);
-    }
-
-    .btn-danger {
-      background: rgba(244, 63, 94, 0.15);
-      color: var(--accent-rose);
-      border: 1px solid rgba(244, 63, 94, 0.3);
-    }
-    .btn-danger:hover {
-      background: rgba(244, 63, 94, 0.25);
-    }
-
-    /* Main Layout */
-    .app-container {
-      display: flex;
-      flex: 1;
-      height: calc(100vh - 64px);
-      position: relative;
-    }
-
-    /* Map container */
-    #map {
-      flex: 1;
-      height: 100%;
-      background: #0b1120;
-      z-index: 1;
-    }
-
-    /* Floating KPI HUD */
-    .kpi-hud {
-      position: absolute;
-      top: 16px;
-      left: 16px;
-      z-index: 900;
-      display: flex;
-      gap: 12px;
-      pointer-events: none;
-    }
-
-    .kpi-card {
-      pointer-events: auto;
-      background: var(--glass-bg);
-      backdrop-filter: var(--glass-blur);
-      border: 1px solid var(--border-color);
-      border-radius: 12px;
-      padding: 12px 18px;
-      min-width: 140px;
-      box-shadow: var(--shadow-lg);
-      transition: transform 0.2s ease;
-    }
-    .kpi-card:hover {
-      transform: translateY(-2px);
-      border-color: var(--border-hover);
-    }
-
-    .kpi-label {
-      font-size: 11px;
-      color: var(--text-muted);
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      margin-bottom: 4px;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .kpi-value {
-      font-size: 20px;
-      font-weight: 700;
-      color: var(--text-main);
-      display: flex;
-      align-items: baseline;
-      gap: 4px;
-    }
-
-    .kpi-unit {
-      font-size: 12px;
-      font-weight: 500;
-      color: var(--text-muted);
-    }
-
-    .kpi-delta {
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--accent-emerald);
-      margin-top: 2px;
-      display: flex;
-      align-items: center;
-      gap: 2px;
-    }
-
-    /* Sidebar */
-    .sidebar {
-      width: 420px;
-      height: 100%;
-      background: var(--bg-surface);
-      border-left: 1px solid var(--border-color);
-      display: flex;
-      flex-direction: column;
-      z-index: 950;
-      box-shadow: -4px 0 20px rgba(0, 0, 0, 0.4);
-    }
-
-    .sidebar-tabs {
-      display: flex;
-      border-bottom: 1px solid var(--border-color);
-      background: rgba(0, 0, 0, 0.2);
-    }
-
-    .tab-btn {
-      flex: 1;
-      padding: 14px 12px;
-      background: transparent;
-      border: none;
-      color: var(--text-muted);
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      border-bottom: 2px solid transparent;
-      transition: all 0.2s;
-    }
-    .tab-btn.active {
-      color: var(--text-main);
-      border-bottom-color: var(--accent-emerald);
-      background: rgba(16, 185, 129, 0.05);
-    }
-
-    .sidebar-content {
-      flex: 1;
-      overflow-y: auto;
-      padding: 18px;
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-    }
-
-    /* Comparison Card */
-    .comparison-card {
-      background: linear-gradient(145deg, rgba(16, 23, 38, 0.95), rgba(24, 34, 56, 0.95));
-      border: 1px solid rgba(16, 185, 129, 0.3);
-      border-radius: 12px;
-      padding: 16px;
-      box-shadow: 0 0 20px rgba(16, 185, 129, 0.1);
-    }
-
-    .comparison-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 12px;
-    }
-
-    .comparison-title {
-      font-size: 14px;
-      font-weight: 700;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      color: var(--accent-emerald);
-    }
-
-    .comparison-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 12px;
-    }
-
-    .comparison-table th {
-      text-align: left;
-      padding: 6px 8px;
-      color: var(--text-muted);
-      font-weight: 600;
-      border-bottom: 1px solid var(--border-color);
-    }
-
-    .comparison-table td {
-      padding: 8px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-    }
-
-    .saving-badge {
-      background: rgba(16, 185, 129, 0.15);
-      color: var(--accent-emerald);
-      padding: 2px 6px;
-      border-radius: 4px;
-      font-weight: 700;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 11px;
-    }
-
-    /* Vehicle Route Cards */
-    .vehicle-card {
-      background: var(--bg-surface-elevated);
-      border: 1px solid var(--border-color);
-      border-radius: 10px;
-      padding: 14px;
-      transition: all 0.2s;
-    }
-    .vehicle-card:hover {
-      border-color: var(--border-hover);
-    }
-
-    .vehicle-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 10px;
-    }
-
-    .vehicle-name-badge {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-weight: 700;
-      font-size: 13px;
-    }
-
-    .color-dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      box-shadow: 0 0 8px currentColor;
-    }
-
-    .progress-bar-container {
-      width: 100%;
-      height: 6px;
-      background: rgba(255, 255, 255, 0.08);
-      border-radius: 3px;
-      overflow: hidden;
-      margin: 8px 0;
-    }
-
-    .progress-bar-fill {
-      height: 100%;
-      border-radius: 3px;
-      transition: width 0.4s ease;
-    }
-
-    .vehicle-stats {
-      display: flex;
-      justify-content: space-between;
-      font-size: 11px;
-      color: var(--text-muted);
-    }
-
-    /* Simulation Events Panel */
-    .events-panel {
-      background: rgba(244, 63, 94, 0.05);
-      border: 1px dashed rgba(244, 63, 94, 0.3);
-      border-radius: 12px;
-      padding: 14px;
-    }
-
-    .events-title {
-      font-size: 12px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: var(--accent-rose);
-      margin-bottom: 10px;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .event-buttons {
-      display: grid;
-      grid-template-columns: 1fr;
-      gap: 8px;
-    }
-
-    /* Stop sequences list */
-    .stop-item {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 8px 10px;
-      border-radius: 6px;
-      background: rgba(255, 255, 255, 0.02);
-      font-size: 12px;
-      border-left: 3px solid transparent;
-      margin-bottom: 4px;
-    }
-    .stop-seq {
-      font-family: 'JetBrains Mono', monospace;
-      font-weight: 700;
-      color: var(--text-muted);
-      width: 22px;
-    }
-    .stop-name {
-      flex: 1;
-      font-weight: 500;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .stop-demand {
-      color: var(--accent-emerald);
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 11px;
-    }
-
-    /* Leaflet popup & control overrides */
-    .leaflet-popup-content-wrapper {
-      background: var(--bg-surface-elevated) !important;
-      color: var(--text-main) !important;
-      border: 1px solid var(--border-color);
-      border-radius: 8px !important;
-      box-shadow: var(--shadow-lg);
-    }
-    .leaflet-popup-tip {
-      background: var(--bg-surface-elevated) !important;
-    }
-    .leaflet-control-layers {
-      background: var(--glass-bg) !important;
-      backdrop-filter: var(--glass-blur) !important;
-      border: 1px solid var(--border-color) !important;
-      border-radius: 10px !important;
-      box-shadow: var(--shadow-lg) !important;
-      color: var(--text-main) !important;
-      padding: 8px 12px !important;
-      font-family: inherit !important;
-      font-size: 12px !important;
-    }
-    .leaflet-control-layers-separator {
-      border-top-color: var(--border-color) !important;
-    }
-    .leaflet-control-layers label {
-      color: var(--text-main) !important;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      margin: 4px 0;
-    }
-    .leaflet-bar a {
-      background-color: var(--bg-surface-elevated) !important;
-      color: var(--text-main) !important;
-      border-bottom: 1px solid var(--border-color) !important;
-    }
-    .leaflet-bar a:hover {
-      background-color: var(--border-hover) !important;
-    }
-
-    /* Notification Banner */
-    .toast-banner {
-      position: absolute;
-      bottom: 24px;
-      left: 24px;
-      z-index: 1000;
-      background: var(--glass-bg);
-      backdrop-filter: var(--glass-blur);
-      border: 1px solid var(--border-color);
-      border-radius: 8px;
-      padding: 12px 18px;
-      box-shadow: var(--shadow-lg);
-      display: none;
-      align-items: center;
-      gap: 10px;
-      font-size: 13px;
-      animation: slideUp 0.3s ease;
-    }
-    @keyframes slideUp {
-      from { transform: translateY(20px); opacity: 0; }
-      to { transform: translateY(0); opacity: 1; }
-    }
-  </style>
+  <!-- Leaflet MarkerCluster CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>
+  
+  <!-- Custom Modern Dashboard Stylesheet -->
+  <link rel="stylesheet" href="/static/css/styles.css">
 </head>
 <body>
 
-  <!-- Top Header -->
-  <header>
-    <div class="brand">
-      <div class="brand-icon">♻</div>
-      <div>
-        <div class="brand-title">EcoRoute AI</div>
-        <div class="brand-subtitle">
-          Municipal Waste Collection Optimizer
-          <span class="badge-software">Software-Only MVP</span>
-        </div>
+  <!-- Top Navigation Control Room Bar -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <button id="toggle-sidebar-btn" class="icon-btn" title="Toggle Sidebar" aria-label="Toggle Navigation Sidebar">
+        ☰
+      </button>
+      <a href="/" class="brand-logo">
+        <div class="brand-icon">♻</div>
+        <span>EcoRoute AI</span>
+      </a>
+      <span class="brand-badge">Smart City Ops</span>
+      <div class="city-pill">
+        <span>📍</span>
+        <span id="active-city-label">Pune (PMC), Maharashtra</span>
       </div>
     </div>
 
-    <div class="header-actions">
-      <div style="font-size: 12px; color: var(--text-muted); margin-right: 12px;">
-        <span style="color: var(--accent-emerald); font-weight: 700;">● Google OR-Tools</span> Engine Active
+    <div class="topbar-right">
+      <!-- OSRM Status Indicator -->
+      <div class="status-badge" title="Road Network Routing Engine Status">
+        <span id="osrm-status-dot" class="status-dot done"></span>
+        <span id="osrm-status-text">Live OSRM Engine</span>
       </div>
-      <button class="btn btn-secondary" onclick="promptOsmCityIngest()" title="Ingest real bins and streets using OpenStreetMap Overpass API (Free)">
-        <i data-lucide="globe" style="width: 15px; height: 15px; color: var(--accent-cyan);"></i>
-        OSM City Ingest
-      </button>
-      <button class="btn btn-secondary" onclick="resetDataset()">
-        <i data-lucide="rotate-ccw" style="width: 15px; height: 15px;"></i>
-        Reset
-      </button>
-      <button class="btn btn-primary" id="btn-optimize" onclick="triggerOptimization()">
-        <i data-lucide="sparkles" style="width: 15px; height: 15px;"></i>
-        Optimize Routes
+
+      <!-- Solver Status Indicator -->
+      <div class="status-badge">
+        <span id="solver-status-dot" class="status-dot idle"></span>
+        <span id="solver-status-text">Idle</span>
+      </div>
+
+      <!-- Traffic Period Badge -->
+      <div class="status-badge" style="border-color: rgba(245, 158, 11, 0.4);">
+        <span>🚦</span>
+        <span id="traffic-period-badge">Real-Time Traffic Active</span>
+      </div>
+
+      <!-- Theme Switcher -->
+      <button id="theme-toggle-btn" class="icon-btn" title="Toggle Dark/Light Theme" aria-label="Toggle Theme">
+        🌓
       </button>
     </div>
   </header>
 
-  <!-- App Layout -->
+  <!-- Main Container -->
   <div class="app-container">
-
-    <!-- Floating Top KPIs -->
-    <div class="kpi-hud" id="kpi-hud">
-      <div class="kpi-card">
-        <div class="kpi-label"><i data-lucide="milestone" style="width:13px; height:13px;"></i> Total Distance</div>
-        <div class="kpi-value"><span id="kpi-distance">--</span> <span class="kpi-unit">km</span></div>
-        <div class="kpi-delta" id="kpi-distance-delta">Run optimization</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label"><i data-lucide="fuel" style="width:13px; height:13px;"></i> Diesel Fuel</div>
-        <div class="kpi-value"><span id="kpi-fuel">--</span> <span class="kpi-unit">L</span></div>
-        <div class="kpi-delta" id="kpi-fuel-delta">Est. 0.45 L/km</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label"><i data-lucide="leaf" style="width:13px; height:13px;"></i> CO₂ Footprint</div>
-        <div class="kpi-value"><span id="kpi-co2">--</span> <span class="kpi-unit">kg</span></div>
-        <div class="kpi-delta" id="kpi-co2-delta">Est. 2.68 kg/L</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label"><i data-lucide="dollar-sign" style="width:13px; height:13px;"></i> Operating Cost</div>
-        <div class="kpi-value"><span id="kpi-cost">--</span> <span class="kpi-unit">USD</span></div>
-        <div class="kpi-delta" id="kpi-cost-delta">Fuel + Labor</div>
-      </div>
-    </div>
-
-    <!-- Map View -->
-    <div id="map"></div>
-
-    <!-- Right Sidebar -->
-    <div class="sidebar">
-      <div class="sidebar-tabs">
-        <button class="tab-btn active" onclick="switchTab('analytics')">
-          <i data-lucide="bar-chart-3" style="width: 15px; height: 15px;"></i>
-          Analytics & Impact
+    
+    <!-- Left Operations Sidebar -->
+    <aside id="sidebar" class="sidebar">
+      <!-- Tab Navigation -->
+      <nav class="sidebar-nav">
+        <button class="nav-tab active" data-tab="setup">
+          <span>⚙️</span>
+          <span>Setup</span>
         </button>
-        <button class="tab-btn" onclick="switchTab('fleet')">
-          <i data-lucide="truck" style="width: 15px; height: 15px;"></i>
-          Fleet & Routes
+        <button class="nav-tab" data-tab="optimize">
+          <span>⚡</span>
+          <span>Optimize</span>
         </button>
-        <button class="tab-btn" onclick="switchTab('events')">
-          <i data-lucide="alert-triangle" style="width: 15px; height: 15px;"></i>
-          Live Incidents
+        <button class="nav-tab" data-tab="results">
+          <span>📊</span>
+          <span>Results</span>
         </button>
-      </div>
+        <button class="nav-tab" data-tab="incidents">
+          <span>🚨</span>
+          <span>Incidents</span>
+        </button>
+        <button class="nav-tab" data-tab="export">
+          <span>📥</span>
+          <span>Export</span>
+        </button>
+      </nav>
 
-      <!-- Tab 1: Analytics & Baseline Comparison -->
-      <div class="sidebar-content" id="tab-analytics">
-        
-        <!-- Live Traffic & Optimization Controls -->
-        <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 10px;">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <span style="font-size: 12px; font-weight: 700; color: var(--accent-cyan); display: flex; align-items: center; gap: 6px;">
-              <i data-lucide="activity" style="width: 14px; height: 14px;"></i> Live Traffic & Fleet Controls
-            </span>
-            <span id="live-traffic-badge" style="font-size: 10px; padding: 2px 7px; border-radius: 12px; background: rgba(16,185,129,0.15); color: var(--accent-emerald); font-weight: 600;">
-              🟢 Live Traffic: Active
-            </span>
+      <!-- TAB 1: Setup & Data Ingestion -->
+      <div id="tab-setup" class="tab-content active">
+        <div class="card">
+          <div class="card-title">
+            <span>Collection Dataset</span>
+            <span id="setup-total-stops" style="font-size:11px; color:var(--accent-primary);">80 points</span>
           </div>
-
-          <div style="display: flex; flex-direction: column; gap: 4px;">
-            <label style="font-size: 11px; color: var(--text-muted); font-weight: 600;">Optimization Objective</label>
-            <select id="opt-objective" style="background: var(--bg-surface-elevated); border: 1px solid var(--border-color); color: var(--text-main); font-size: 12px; padding: 6px 10px; border-radius: 6px; outline: none;">
-              <option value="fuel" selected>⛽ Maximize Fuel Efficiency (Load & Traffic Aware)</option>
-              <option value="traffic_duration">⏱️ Minimize Travel & Collection Time</option>
-              <option value="distance">📏 Minimize Total Road Distance</option>
-            </select>
-          </div>
-
-          <div style="display: flex; flex-direction: column; gap: 4px;">
-            <label style="font-size: 11px; color: var(--text-muted); font-weight: 600;">Fleet Sizing Strategy</label>
-            <select id="opt-fleet-mode" style="background: var(--bg-surface-elevated); border: 1px solid var(--border-color); color: var(--text-main); font-size: 12px; padding: 6px 10px; border-radius: 6px; outline: none;">
-              <option value="auto_minimize_vehicles" selected>⚡ Auto-Minimize Fleet (Depot Savings)</option>
-              <option value="fixed_fleet">⚖️ Distribute Across All Trucks</option>
-            </select>
-          </div>
-
-          <div style="display: flex; justify-content: space-between; align-items: center; padding-top: 4px;">
-            <label style="font-size: 11px; color: var(--text-muted); font-weight: 600; display: flex; align-items: center; gap: 6px; cursor: pointer;">
-              <input type="checkbox" id="traffic-toggle" checked style="accent-color: var(--accent-emerald); cursor: pointer;">
-              Real-Time Traffic Congestion Delays
-            </label>
-            <span id="traffic-period-label" style="font-size: 10px; color: var(--text-dim);">Live Sync</span>
-          </div>
-        </div>
-
-        <!-- Comparison Card -->
-        <div class="comparison-card" id="comparison-card" style="display: none;">
-          <div class="comparison-header">
-            <div class="comparison-title">
-              <i data-lucide="trending-down" style="width: 16px; height: 16px;"></i>
-              Baseline vs OR-Tools CVRP
-            </div>
-            <span class="badge-software">Verified</span>
-          </div>
-          <table class="comparison-table">
-            <thead>
-              <tr>
-                <th>Metric</th>
-                <th>Baseline</th>
-                <th>OR-Tools</th>
-                <th>Savings</th>
-              </tr>
-            </thead>
-            <tbody id="comparison-body">
-              <!-- Dynamically populated -->
-            </tbody>
-          </table>
-
-          <!-- 100% Free Open-Source Exports -->
-          <div id="export-section" style="display: none; padding-top: 12px; border-top: 1px solid var(--border-color); margin-top: 12px;">
-            <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 8px;">
-              Free Open-Source Plan Exports
-            </div>
-            <div style="display: flex; gap: 8px;">
-              <a href="/api/v1/export/geojson" target="_blank" class="btn btn-secondary" style="flex: 1; text-decoration: none; justify-content: center; font-size: 11px; padding: 7px 10px;">
-                <i data-lucide="map" style="width: 13px; height: 13px; color: var(--accent-cyan);"></i>
-                GeoJSON (QGIS)
-              </a>
-              <a href="/api/v1/export/manifest" target="_blank" class="btn btn-secondary" style="flex: 1; text-decoration: none; justify-content: center; font-size: 11px; padding: 7px 10px;">
-                <i data-lucide="file-spreadsheet" style="width: 13px; height: 13px; color: var(--accent-emerald);"></i>
-                Driver Manifest
-              </a>
-            </div>
-          </div>
-        </div>
-
-        <!-- System Architecture Note for Mentor Presentation -->
-        <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 10px; padding: 14px; font-size: 12px; line-height: 1.6;">
-          <div style="font-weight: 700; color: var(--text-main); margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
-            <i data-lucide="cpu" style="width: 14px; height: 14px; color: var(--accent-cyan);"></i>
-            Mentor Demonstration Notes
-          </div>
-          <div style="color: var(--text-muted);">
-            • <b>Zero-Hardware Approach:</b> Operates without live GPS or IoT bin sensors. Driven by software scheduling & event updates.<br>
-            • <b>Exact Road Topology:</b> Routes snap to real OpenStreetMap road segments using OSRM, respecting real distances and turns.<br>
-            • <b>Optimization Strategy:</b> Solves Capacitated Vehicle Routing Problem (CVRP) via OR-Tools using Guided Local Search.
-          </div>
-        </div>
-
-        <!-- Vehicle load summaries -->
-        <div id="fleet-mini-summary" style="display: flex; flex-direction: column; gap: 10px;">
-          <!-- Dynamically populated -->
-        </div>
-
-      </div>
-
-      <!-- Tab 2: Fleet & Turn-by-Turn Manifest -->
-      <div class="sidebar-content" id="tab-fleet" style="display: none;">
-        <div style="font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">
-          Assigned Collection Vehicles (4)
-        </div>
-        <div id="fleet-detailed-list" style="display: flex; flex-direction: column; gap: 12px;">
-          <!-- Dynamically populated -->
-        </div>
-      </div>
-
-      <!-- Tab 3: Dynamic Incident Simulation -->
-      <div class="sidebar-content" id="tab-events" style="display: none;">
-        <div class="events-panel">
-          <div class="events-title">
-            <i data-lucide="zap" style="width: 15px; height: 15px;"></i>
-            Dynamic Reoptimization Triggers
-          </div>
-          <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
-            Simulate real-world operational changes to demonstrate how the software dynamically re-routes without physical sensors:
+          <p style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">
+            Pre-loaded with 80 authentic municipal bins across Pune (Shivajinagar, Kothrud, Central Peths, Swargate, Hadapsar).
           </p>
-          <div class="event-buttons">
-            <button class="btn btn-secondary" onclick="simulateIncident('traffic_jam')">
-              <i data-lucide="traffic-cone" style="width: 14px; height: 14px; color: var(--accent-amber);"></i>
-              Report Traffic Jam (Swargate Junction)
-            </button>
-            <button class="btn btn-secondary" onclick="simulateIncident('road_closure')">
-              <i data-lucide="shield-alert" style="width: 14px; height: 14px; color: var(--accent-rose);"></i>
-              Report Road Closure (JM Road / Deccan)
-            </button>
-            <button class="btn btn-secondary" onclick="simulateIncident('urgent_pickup')">
-              <i data-lucide="plus-circle" style="width: 14px; height: 14px; color: var(--accent-amber);"></i>
-              Add Emergency High-Priority Pickup (Shaniwar Wada)
-            </button>
-            <button class="btn btn-secondary" onclick="simulateIncident('missed_stop')">
-              <i data-lucide="x-circle" style="width: 14px; height: 14px; color: var(--accent-cyan);"></i>
-              Mark Collection Point #4 (Tulshibaug) Missed
-            </button>
+          <div style="display:flex; gap:8px;">
+            <a href="/api/v1/export/template" class="btn btn-secondary btn-sm" style="flex:1;">
+              📥 CSV Template
+            </a>
+            <label class="btn btn-secondary btn-sm" style="flex:1; cursor:pointer;">
+              📤 Upload CSV
+              <input type="file" id="csv-upload-input" accept=".csv" style="display:none;">
+            </label>
           </div>
         </div>
 
-        <!-- Active incidents list -->
-        <div style="margin-top: 14px;">
-          <div style="font-size: 12px; font-weight: 700; color: var(--text-muted); margin-bottom: 8px;">
-            Active Operational Incidents (<span id="incidents-count">0</span>)
+        <div class="card">
+          <div class="card-title">
+            <span>Ingest Global City (OSM Overpass)</span>
+            <span>🌐</span>
           </div>
-          <div id="incidents-list" style="display: flex; flex-direction: column; gap: 8px;">
-            <div style="font-size: 12px; color: var(--text-dim); text-align: center; padding: 16px;">
-              No incidents reported. System operating normally.
-            </div>
+          <p style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">
+            Extract real waste disposal & recycling infrastructure dynamically from OpenStreetMap Overpass API (100% free).
+          </p>
+          <div class="form-group">
+            <input type="text" id="osm-city-input" class="form-control" placeholder="e.g. Pune, Mumbai, Delhi" value="Pune">
+          </div>
+          <button id="btn-extract-osm" class="btn btn-secondary btn-sm" style="width:100%;">
+            Fetch Live City Infrastructure
+          </button>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>PMC Municipal Fleet (4 Vehicles)</span>
+            <span>🚛</span>
+          </div>
+          <div id="vehicles-list-view">
+            <!-- Dynamically populated -->
           </div>
         </div>
       </div>
 
-    </div>
+      <!-- TAB 2: Optimize & Dispatch Controls -->
+      <div id="tab-optimize" class="tab-content">
+        <div class="card">
+          <div class="card-title">
+            <span>CVRP Solver Configuration</span>
+            <span>🧮</span>
+          </div>
 
-  </div>
+          <div class="form-group">
+            <label class="form-label">Collection Stops To Service</label>
+            <div class="range-slider-group">
+              <input type="range" id="opt-stop-count" class="range-slider" min="10" max="80" value="50" step="5">
+              <span id="opt-stop-count-val" class="range-val">50</span>
+            </div>
+          </div>
 
-  <!-- Toast Notification Banner -->
-  <div class="toast-banner" id="toast-banner">
-    <i data-lucide="check-circle" style="color: var(--accent-emerald); width: 18px; height: 18px;"></i>
-    <span id="toast-message">Plan optimized successfully.</span>
-  </div>
+          <div class="form-group">
+            <label class="form-label">Available Vehicles (Max Dispatched)</label>
+            <div class="range-slider-group">
+              <input type="range" id="opt-veh-count" class="range-slider" min="1" max="4" value="4" step="1">
+              <span id="opt-veh-count-val" class="range-val">4</span>
+            </div>
+          </div>
 
-  <!-- Leaflet JS -->
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+          <div class="form-group">
+            <label class="form-label">Optimization Objective</label>
+            <select id="opt-objective" class="form-select">
+              <option value="fuel" selected>Fuel & CO₂ Emissions (EEA MEET Model)</option>
+              <option value="traffic_duration">Traffic Congestion Travel Time</option>
+              <option value="distance">Shortest Road Distance (km)</option>
+            </select>
+          </div>
 
-  <script>
-    // State
-    let map;
-    let markersLayer = L.layerGroup();
-    let routesLayer = L.layerGroup();
-    let trafficLayer = L.layerGroup();
-    let depotMarker = null;
-    let dataset = null;
-    let lastOptimizationResult = null;
+          <div class="form-group">
+            <label class="form-label">Fleet Sizing Strategy</label>
+            <select id="opt-fleet-mode" class="form-select">
+              <option value="auto_minimize_vehicles" selected>Auto-Minimize Vehicles (Reduce Fixed Costs)</option>
+              <option value="fixed_fleet">Fixed Fleet (Utilize All Available Trucks)</option>
+            </select>
+          </div>
 
-    // Initialize Map
-    function initMap() {
-      // Centered on Pune Central Solid Waste District
-      map = L.map('map', {
-        zoomControl: false,
-        attributionControl: true
-      }).setView([18.5284, 73.8480], 13);
+          <div class="form-group">
+            <label class="form-label">Solver Time Limit</label>
+            <div class="range-slider-group">
+              <input type="range" id="opt-time-limit" class="range-slider" min="3" max="45" value="15" step="1">
+              <span id="opt-time-limit-val" class="range-val">15s</span>
+            </div>
+          </div>
 
-      // Add Zoom Control to bottom-right
-      L.control.zoom({ position: 'bottomright' }).addTo(map);
-
-      // Real World Basemaps without any API key
-      const osmStandard = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-      });
-
-      const esriStreets = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
-        maxZoom: 19,
-        attribution: 'Tiles &copy; Esri'
-      });
-
-      const esriSatellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-        maxZoom: 19,
-        attribution: 'Tiles &copy; Esri Satellite'
-      });
-
-      // Default to real OpenStreetMap (No API key needed)
-      osmStandard.addTo(map);
-
-      // Basemap layer switcher (All 100% Free - No API Key Required)
-      const baseMaps = {
-        "🗺️ Real Street Map (OSM)": osmStandard,
-        "🏙️ Municipal Streets (Esri)": esriStreets,
-        "🛰️ Satellite View (Esri)": esriSatellite
-      };
-
-      const overlayMaps = {
-        "📍 Collection Points & Depot": markersLayer,
-        "🚛 Optimized Truck Routes": routesLayer,
-        "🚦 Real-Time Traffic Flow": trafficLayer
-      };
-
-      L.control.layers(baseMaps, overlayMaps, { position: 'topright' }).addTo(map);
-
-      markersLayer.addTo(map);
-      routesLayer.addTo(map);
-      trafficLayer.addTo(map);
-
-      loadDataset();
-    }
-
-    // Load initial dataset
-    async function loadDataset() {
-      try {
-        const resp = await fetch('/api/v1/dataset');
-        dataset = await resp.json();
-        if (dataset && dataset.depot) {
-          map.setView([dataset.depot.lat, dataset.depot.lon], 13);
-        }
-        renderDatasetOnMap();
-        updateIncidentsUI();
-        lucide.createIcons();
-
-        // Fetch real-time traffic status
-        fetch('/api/v1/traffic/status')
-          .then(r => r.json())
-          .then(t => {
-            if (t.success) {
-              const badge = document.getElementById('live-traffic-badge');
-              if (badge) {
-                badge.innerText = `🚦 ${t.period_name} (${t.base_congestion_factor}x)`;
-                badge.style.background = t.base_congestion_factor > 1.5 ? 'rgba(244,63,94,0.15)' : 'rgba(16,185,129,0.15)';
-                badge.style.color = t.base_congestion_factor > 1.5 ? 'var(--accent-rose)' : 'var(--accent-emerald)';
-              }
-              const periodLbl = document.getElementById('traffic-period-label');
-              if (periodLbl) periodLbl.innerText = `${t.current_time} - ${t.period_name}`;
-            }
-          }).catch(console.error);
-      } catch (err) {
-        console.error('Failed to load dataset:', err);
-      }
-    }
-
-    // Render collection points and depot
-    function renderDatasetOnMap() {
-      markersLayer.clearLayers();
-
-      // Render Central Depot
-      const depot = dataset.depot;
-      const depotIcon = L.divIcon({
-        className: 'depot-custom-icon',
-        html: `
-          <div style="
-            background: linear-gradient(135deg, #1e293b, #0f172a);
-            border: 2px solid #38bdf8;
-            box-shadow: 0 0 16px rgba(56, 189, 248, 0.6);
-            border-radius: 8px;
-            width: 32px;
-            height: 32px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #38bdf8;
-            font-size: 16px;
-            font-weight: 800;
-          ">🏭</div>
-        `,
-        iconSize: [32, 32],
-        iconAnchor: [16, 16]
-      });
-
-      depotMarker = L.marker([depot.lat, depot.lon], { icon: depotIcon }).addTo(markersLayer);
-      depotMarker.bindPopup(`
-        <div style="font-family: sans-serif; padding: 4px;">
-          <h4 style="margin: 0 0 4px 0; color: #38bdf8;">${depot.name}</h4>
-          <p style="margin: 0; font-size: 11px; color: #94a3b8;">${depot.address}</p>
-          <div style="margin-top: 6px; font-size: 11px; font-weight: 600; color: #10b981;">Fleet Base: 4 Collection Trucks</div>
+          <button id="btn-run-optimize" class="btn btn-primary" style="margin-top:10px;">
+            ⚡ Optimize Multi-Vehicle Routes
+          </button>
         </div>
-      `);
 
-      // Render Collection Points
-      dataset.locations.forEach((loc, idx) => {
-        let color = '#3b82f6';
-        let radius = 6;
-        let priorityLabel = 'Normal';
+        <div class="card" style="font-size:12px; color:var(--text-muted);">
+          <strong style="color:var(--text-main); display:block; margin-bottom:6px;">Algorithm Specs:</strong>
+          • Google OR-Tools CVRP with Guided Local Search metaheuristic.<br/>
+          • Strict vehicle capacity limits & 8-hour shift constraints.<br/>
+          • Real-time congestion matrices from live Pune traffic bottlenecks.<br/>
+          • Load-dependent diesel rate (0.36 - 0.54 L/km) + 2.4 L/hr idling.
+        </div>
+      </div>
 
-        if (loc.priority === 4) {
-          color = '#f43f5e';
-          radius = 9;
-          priorityLabel = '🚨 Urgent';
-        } else if (loc.priority === 3) {
-          color = '#f59e0b';
-          radius = 8;
-          priorityLabel = 'High';
-        } else if (loc.priority === 2) {
-          color = '#06b6d4';
-          radius = 7;
-          priorityLabel = 'Moderate';
-        }
-
-        const circle = L.circleMarker([loc.lat, loc.lon], {
-          radius: radius,
-          fillColor: color,
-          color: '#ffffff',
-          weight: 1.5,
-          opacity: 0.9,
-          fillOpacity: 0.85
-        }).addTo(markersLayer);
-
-        circle.bindPopup(`
-          <div style="font-family: sans-serif; padding: 4px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-              <strong style="color: #f8fafc; font-size: 12px;">#${loc.id} ${loc.name}</strong>
-              <span style="font-size: 10px; padding: 2px 5px; border-radius: 4px; background: rgba(255,255,255,0.1); color: ${color};">${priorityLabel}</span>
-            </div>
-            <div style="font-size: 11px; color: #94a3b8;">
-              Demand: <b style="color: #10b981;">${loc.demand_kg} kg</b> | Service: ${loc.service_time_sec}s
-            </div>
-            <div style="font-size: 10px; color: #64748b; margin-top: 4px;">Status: ${loc.status}</div>
+      <!-- TAB 3: Results & Analytics -->
+      <div id="tab-results" class="tab-content">
+        <!-- Savings Highlight Banner -->
+        <div class="savings-banner">
+          <div class="savings-header">
+            <span>SAVINGS OVER NEAREST-NEIGHBOR BASELINE</span>
+            <span>⭐</span>
           </div>
-        `);
-      });
-    }
-
-    // Trigger CVRP Optimization
-    async function triggerOptimization() {
-      const btn = document.getElementById('btn-optimize');
-      btn.innerHTML = `<i data-lucide="loader-2" class="spin" style="width: 15px; height: 15px;"></i> Solving...`;
-      btn.disabled = true;
-
-      const objVal = document.getElementById('opt-objective') ? document.getElementById('opt-objective').value : 'fuel';
-      const fleetMode = document.getElementById('opt-fleet-mode') ? document.getElementById('opt-fleet-mode').value : 'auto_minimize_vehicles';
-      const trafficOn = document.getElementById('traffic-toggle') ? document.getElementById('traffic-toggle').checked : true;
-
-      try {
-        const resp = await fetch('/api/v1/optimize', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            selected_stop_count: 50,
-            objective: objVal,
-            time_limit_sec: 10,
-            active_vehicles_count: 4,
-            fleet_mode: fleetMode,
-            traffic_enabled: trafficOn
-          })
-        });
-
-        const data = await resp.json();
-        lastOptimizationResult = data;
-
-        // Update Traffic HUD Badge
-        if (data.traffic) {
-          const badge = document.getElementById('live-traffic-badge');
-          if (badge) {
-            badge.innerText = `🚦 ${data.traffic.period_name} (${data.traffic.avg_congestion_index}x)`;
-            badge.style.background = data.traffic.avg_congestion_index > 1.5 ? 'rgba(244,63,94,0.15)' : 'rgba(16,185,129,0.15)';
-            badge.style.color = data.traffic.avg_congestion_index > 1.5 ? 'var(--accent-rose)' : 'var(--accent-emerald)';
-          }
-          const periodLbl = document.getElementById('traffic-period-label');
-          if (periodLbl) periodLbl.innerText = `${data.traffic.current_time} - ${data.traffic.period_name}`;
-        }
-
-        // Render Traffic Overlay on Map
-        if (data.traffic_overlay && data.traffic_overlay.length > 0) {
-          trafficLayer.clearLayers();
-          data.traffic_overlay.forEach(seg => {
-            L.polyline([seg.from_coord, seg.to_coord], {
-              color: seg.color,
-              weight: 3.5,
-              opacity: 0.65,
-              dashArray: '5, 8'
-            }).addTo(trafficLayer);
-          });
-        }
-
-        // Render Routes
-        renderRoutesOnMap(data.solution.routes);
-
-        // Update KPIs
-        updateKPIs(data.solution.metrics, data.comparison.savings);
-
-        // Update Comparison Table
-        renderComparisonTable(data.comparison);
-
-        // Reveal Open-Source Export Section
-        const expSec = document.getElementById('export-section');
-        if (expSec) expSec.style.display = 'block';
-
-        // Update Fleet List
-        renderFleetList(data.solution.routes);
-
-        const vehSavedMsg = data.comparison.savings.vehicles_saved > 0 ? ` (${data.comparison.savings.vehicles_saved} surplus trucks kept at depot!)` : '';
-        showToast(`Optimization complete! Fuel reduced by ${data.comparison.savings.fuel_percent}%${vehSavedMsg}.`);
-      } catch (err) {
-        console.error('Optimization error:', err);
-        showToast('Error during route optimization.');
-      } finally {
-        btn.innerHTML = `<i data-lucide="sparkles" style="width: 15px; height: 15px;"></i> Optimize Routes`;
-        btn.disabled = false;
-        lucide.createIcons();
-      }
-    }
-
-    // Render Routes
-    function renderRoutesOnMap(routes) {
-      routesLayer.clearLayers();
-
-      routes.forEach((route, idx) => {
-        if (!route.geometry || route.geometry.length < 2) return;
-
-        // OSRM geometry is [ [lon, lat], ... ] -> Leaflet needs [ [lat, lon], ... ]
-        const latLngs = route.geometry.map(coord => [coord[1], coord[0]]);
-
-        // Polyline with glow
-        const polyline = L.polyline(latLngs, {
-          color: route.color || '#10b981',
-          weight: 4.5,
-          opacity: 0.85,
-          lineJoin: 'round',
-          dashArray: null
-        }).addTo(routesLayer);
-
-        polyline.bindPopup(`
-          <div style="font-family: sans-serif; padding: 4px;">
-            <h4 style="margin: 0 0 4px 0; color: ${route.color};">${route.vehicle_name}</h4>
-            <div style="font-size: 11px; color: #94a3b8;">
-              Distance: <b>${(route.total_distance_m / 1000).toFixed(1)} km</b><br>
-              Total Waste Collected: <b>${route.total_demand_kg} kg</b> (${Math.round((route.total_demand_kg/route.vehicle_capacity_kg)*100)}% capacity)<br>
-              Total Stops Visited: <b>${route.stops.length - 2}</b>
+          <div class="savings-stats">
+            <div class="saving-item">
+              <div id="saving-km" class="val">-0 km</div>
+              <div class="lbl">Distance</div>
+            </div>
+            <div class="saving-item">
+              <div id="saving-fuel" class="val">-0 L</div>
+              <div class="lbl">Fuel</div>
+            </div>
+            <div class="saving-item">
+              <div id="saving-cost" class="val">-₹0</div>
+              <div class="lbl">Total Cost</div>
             </div>
           </div>
-        `);
-      });
+        </div>
 
-      // Fit map bounds to routes
-      if (routes.length > 0 && routes[0].geometry.length > 0) {
-        const allPoints = routes.flatMap(r => r.geometry.map(c => [c[1], c[0]]));
-        map.fitBounds(L.latLngBounds(allPoints), { padding: [50, 50] });
-      }
-    }
+        <!-- Before / After Diff Alert -->
+        <div id="route-diff-banner" style="display:none; background:rgba(6,182,212,0.15); border:1px solid #06b6d4; border-radius:var(--radius-sm); padding:8px 12px; font-size:12px; color:#22d3ee; margin-bottom:12px;"></div>
 
-    // Update KPIs HUD
-    function updateKPIs(metrics, savings) {
-      document.getElementById('kpi-distance').innerText = metrics.total_distance_km;
-      document.getElementById('kpi-distance-delta').innerHTML = `↓ ${savings.distance_percent}% vs baseline`;
+        <!-- KPI Grid -->
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <div class="kpi-label">Total Distance</div>
+            <div id="kpi-distance" class="kpi-value">0.0 km</div>
+            <div class="kpi-sub">Actual road network</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Diesel Consumed</div>
+            <div id="kpi-fuel" class="kpi-value">0.0 L</div>
+            <div class="kpi-sub">EEA MEET model</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">CO₂ Emissions</div>
+            <div id="kpi-co2" class="kpi-value">0.0 kg</div>
+            <div class="kpi-sub">2.68 kg CO₂/L</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Estimated Cost</div>
+            <div id="kpi-cost" class="kpi-value">₹0</div>
+            <div class="kpi-sub">Fuel ₹94.5 + Crew ₹250/h</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Trucks Dispatched</div>
+            <div id="kpi-vehicles" class="kpi-value">0 / 4</div>
+            <div class="kpi-sub">Dynamic fleet sizing</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Est. Duration</div>
+            <div id="kpi-duration" class="kpi-value">0 min</div>
+            <div class="kpi-sub">Travel + service time</div>
+          </div>
+        </div>
 
-      document.getElementById('kpi-fuel').innerText = metrics.est_fuel_liters;
-      document.getElementById('kpi-fuel-delta').innerHTML = `↓ ${savings.fuel_liters} L saved`;
+        <!-- Chart 1: Comparison Bar Chart -->
+        <div class="card">
+          <div class="card-title">
+            <span>Baseline vs OR-Tools Comparison</span>
+          </div>
+          <div style="height:220px; position:relative;">
+            <canvas id="comparisonChart"></canvas>
+          </div>
+        </div>
 
-      document.getElementById('kpi-co2').innerText = metrics.est_co2_kg;
-      document.getElementById('kpi-co2-delta').innerHTML = `↓ ${savings.co2_kg} kg reduced`;
+        <!-- Chart 2: Vehicle Workload Balance -->
+        <div class="card">
+          <div class="card-title">
+            <span>Workload Balance (Payload vs Capacity)</span>
+          </div>
+          <div style="height:180px; position:relative;">
+            <canvas id="workloadChart"></canvas>
+          </div>
+        </div>
 
-      document.getElementById('kpi-cost').innerText = `$${metrics.est_total_cost}`;
-      document.getElementById('kpi-cost-delta').innerHTML = `↓ $${savings.cost_dollars} saved`;
-    }
+        <!-- Vehicle Route Details Table -->
+        <div class="card">
+          <div class="card-title">
+            <span>Per-Vehicle Routes Breakdown</span>
+          </div>
+          <div id="results-vehicle-table">
+            <!-- Dynamically populated -->
+          </div>
+        </div>
+      </div>
 
-    // Render Comparison Table
-    function renderComparisonTable(comparison) {
-      const card = document.getElementById('comparison-card');
-      card.style.display = 'block';
+      <!-- TAB 4: Live Incidents & Dynamic Rerouting -->
+      <div id="tab-incidents" class="tab-content">
+        <div class="card">
+          <div class="card-title">
+            <span>Interactive Incident Reporting</span>
+            <span>🚨</span>
+          </div>
+          <p style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">
+            Simulate real-time smart city events. Click a button below to place on the map or trigger re-routing.
+          </p>
 
-      const b = comparison.baseline;
-      const o = comparison.optimized;
-      const s = comparison.savings;
+          <div style="display:flex; flex-direction:column; gap:8px;">
+            <button id="btn-add-road-closure" class="btn btn-danger btn-sm">
+              🚧 Place Road Closure (Click Map)
+            </button>
+            <button id="btn-add-urgent-pickup" class="btn btn-secondary btn-sm">
+              🚨 Add Urgent Bin Overflow (Click Map)
+            </button>
+          </div>
 
-      const body = document.getElementById('comparison-body');
-      const vehBadge = s.vehicles_saved > 0 ? `<span class="saving-badge" style="background:rgba(16,185,129,0.2); color:var(--accent-emerald);">${s.vehicles_saved} Trucks Saved in Depot</span>` : `<span style="font-size:11px; color:var(--text-muted);">Optimal Fleet</span>`;
-
-      body.innerHTML = `
-        <tr>
-          <td>Active Fleet Dispatched</td>
-          <td>${b.vehicles_used} / ${s.fleet_available || 4} Trucks</td>
-          <td style="font-weight:700; color:var(--accent-emerald);">${o.vehicles_used} Trucks</td>
-          <td>${vehBadge}</td>
-        </tr>
-        <tr>
-          <td>Total Road Distance</td>
-          <td>${b.total_distance_km} km</td>
-          <td style="font-weight:700; color:var(--accent-emerald);">${o.total_distance_km} km</td>
-          <td><span class="saving-badge">-${s.distance_percent}%</span></td>
-        </tr>
-        <tr>
-          <td>Diesel Fuel (Load + Traffic Delay)</td>
-          <td>${b.est_fuel_liters} L</td>
-          <td style="font-weight:700; color:var(--accent-emerald);">${o.est_fuel_liters} L</td>
-          <td><span class="saving-badge">-${s.fuel_percent}%</span></td>
-        </tr>
-        <tr>
-          <td>CO₂ Emissions</td>
-          <td>${b.est_co2_kg} kg</td>
-          <td style="font-weight:700; color:var(--accent-emerald);">${o.est_co2_kg} kg</td>
-          <td><span class="saving-badge">-${s.co2_percent}%</span></td>
-        </tr>
-        <tr>
-          <td>Operating Cost (Fuel + Labor)</td>
-          <td>$${b.est_total_cost}</td>
-          <td style="font-weight:700; color:var(--accent-emerald);">$${o.est_total_cost}</td>
-          <td><span class="saving-badge">-$${s.cost_dollars}</span></td>
-        </tr>
-        <tr>
-          <td>Workload Balance (Std)</td>
-          <td>${b.workload_balance_std_km} km</td>
-          <td style="font-weight:700; color:var(--accent-cyan);">${o.workload_balance_std_km} km</td>
-          <td><span style="font-size:11px; color:var(--text-muted);">Balanced</span></td>
-        </tr>
-      `;
-    }
-
-    // Render Fleet list in sidebar
-    function renderFleetList(routes) {
-      const container = document.getElementById('fleet-detailed-list');
-      const miniSummary = document.getElementById('fleet-mini-summary');
-      container.innerHTML = '';
-      miniSummary.innerHTML = '';
-
-      routes.forEach((route, idx) => {
-        const capacityPct = Math.round((route.total_demand_kg / route.vehicle_capacity_kg) * 100);
-        
-        // Mini card for Analytics tab
-        const miniCard = document.createElement('div');
-        miniCard.className = 'vehicle-card';
-        miniCard.innerHTML = `
-          <div class="vehicle-header">
-            <div class="vehicle-name-badge">
-              <div class="color-dot" style="background: ${route.color}; color: ${route.color};"></div>
-              <span>${route.vehicle_name}</span>
+          <div style="margin-top:14px; border-top:1px solid var(--border-color); padding-top:12px;">
+            <label class="form-label">Report Missed Collection Point</label>
+            <div style="display:flex; gap:6px;">
+              <select id="missed-stop-select" class="form-select" style="font-size:11px;">
+                <!-- Populated dynamically -->
+              </select>
+              <button id="btn-report-missed" class="btn btn-secondary btn-sm" style="white-space:nowrap;">
+                Mark Missed
+              </button>
             </div>
-            <span style="font-size:11px; font-weight:700; color:${route.color};">${(route.total_distance_m/1000).toFixed(1)} km</span>
           </div>
-          <div class="progress-bar-container">
-            <div class="progress-bar-fill" style="width: ${Math.min(capacityPct, 100)}%; background: ${route.color};"></div>
+        </div>
+
+        <!-- Action Control Buttons -->
+        <div style="display:flex; gap:8px; margin-bottom:14px;">
+          <button id="btn-undo-incident" class="btn btn-secondary btn-sm" style="flex:1;">
+            ↩️ Undo Last Incident
+          </button>
+          <button id="btn-reset-incidents" class="btn btn-danger btn-sm" style="flex:1;">
+            🔄 Reset to Initial Plan
+          </button>
+        </div>
+
+        <!-- Live Incident Log Timeline -->
+        <div class="card">
+          <div class="card-title">
+            <span>Incident Timeline Log</span>
           </div>
-          <div class="vehicle-stats">
-            <span>Payload: ${route.total_demand_kg} / ${route.vehicle_capacity_kg} kg</span>
-            <span>${capacityPct}% Cap</span>
+          <div id="incidents-timeline" class="timeline">
+            <!-- Dynamically populated -->
           </div>
-        `;
-        miniSummary.appendChild(miniCard);
+        </div>
+      </div>
 
-        // Detailed card for Fleet tab with stop sequences
-        const detailedCard = document.createElement('div');
-        detailedCard.className = 'vehicle-card';
-        
-        let stopsHtml = '';
-        route.stops.slice(1, -1).forEach((s, sIdx) => {
-          stopsHtml += `
-            <div class="stop-item">
-              <span class="stop-seq">${sIdx + 1}</span>
-              <span class="stop-name">${s.location_name}</span>
-              <span class="stop-demand">+${s.collected_kg}kg</span>
-            </div>
-          `;
-        });
-
-        detailedCard.innerHTML = `
-          <div class="vehicle-header">
-            <div class="vehicle-name-badge">
-              <div class="color-dot" style="background: ${route.color}; color: ${route.color};"></div>
-              <span>${route.vehicle_name}</span>
-            </div>
-            <span class="badge-software">${route.stops.length - 2} stops</span>
+      <!-- TAB 5: Export & Reports -->
+      <div id="tab-export" class="tab-content">
+        <div class="card">
+          <div class="card-title">
+            <span>Export Optimization Plans</span>
+            <span>💾</span>
           </div>
-          <div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">
-            Distance: ${(route.total_distance_m/1000).toFixed(1)} km | Load: ${route.total_demand_kg} kg
+          <p style="font-size:12px; color:var(--text-muted); margin-bottom:14px;">
+            Export standard formats for GIS integration (QGIS, ArcGIS) and municipal driver paperless dispatch.
+          </p>
+
+          <div style="display:flex; flex-direction:column; gap:10px;">
+            <a href="/api/v1/export/geojson" download class="btn btn-secondary">
+              🗺️ Download GeoJSON (Road Routes & Stops)
+            </a>
+            <a href="/api/v1/export/manifest" download class="btn btn-secondary">
+              📄 Download Driver Manifest (CSV)
+            </a>
+            <a href="/api/v1/export/report-html" target="_blank" class="btn btn-primary">
+              🖨️ Open Printable Driver HTML Shift Report
+            </a>
           </div>
-          <div style="max-height: 180px; overflow-y: auto; margin-top: 8px;">
-            ${stopsHtml}
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>Smart City System Architecture</span>
           </div>
-        `;
-        container.appendChild(detailedCard);
-      });
-    }
+          <div style="font-size:11px; color:var(--text-muted); line-height:1.6;">
+            <strong>Backend:</strong> FastAPI, Python 3.11+, SQLAlchemy<br/>
+            <strong>CVRP Solver:</strong> Google OR-Tools Guided Local Search<br/>
+            <strong>Routing Matrix:</strong> OSRM with 1.32x Urban Circuity Fallback<br/>
+            <strong>Emissions Model:</strong> European Environmental Agency (EEA) MEET<br/>
+            <strong>GIS Ingestion:</strong> 100% Free OpenStreetMap Overpass API<br/>
+            <strong>Hardware:</strong> 100% Software-Only (Zero IoT/RFID required)
+          </div>
+        </div>
+      </div>
+    </aside>
 
-    // Ingest real OpenStreetMap points using 100% Free Overpass API
-    async function promptOsmCityIngest() {
-      const city = prompt("Enter city name to ingest real OSM municipal points (100% Free Overpass API):", "Pune");
-      if (!city) return;
+    <!-- Map View Area -->
+    <main class="map-wrapper">
+      <div id="map"></div>
 
-      showToast(`Querying OpenStreetMap Overpass API for ${city}...`);
-      try {
-        const resp = await fetch('/api/v1/osm/extract', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            city: city,
-            radius_meters: 5000,
-            limit: 50
-          })
-        });
-        const res = await resp.json();
-        if (res.success) {
-          routesLayer.clearLayers();
-          const compCard = document.getElementById('comparison-card');
-          if (compCard) compCard.style.display = 'none';
-          const expSec = document.getElementById('export-section');
-          if (expSec) expSec.style.display = 'none';
-          await loadDataset();
-          showToast(`Ingested ${res.total_stops} real OpenStreetMap points for ${res.city}! Click Optimize Routes.`);
-        } else {
-          showToast(`Failed to extract OSM data: ${res.detail || 'Unknown error'}`);
-        }
-      } catch (err) {
-        console.error(err);
-        showToast('Error querying OpenStreetMap Overpass API.');
-      }
-    }
+      <!-- Placement Alert Banner -->
+      <div id="placement-banner" class="incident-placement-mode" style="display:none;">
+        <span id="placement-banner-text">Click anywhere on the map</span>
+        <button id="btn-cancel-placement" style="background:#fff; color:#111; border:none; padding:2px 8px; border-radius:4px; cursor:pointer; font-size:11px; font-weight:bold;">Cancel</button>
+      </div>
 
-    // Simulate Incident
-    async function simulateIncident(type) {
-      let desc = '';
-      let incLat = (dataset && dataset.depot) ? dataset.depot.lat : 18.5284;
-      let incLon = (dataset && dataset.depot) ? dataset.depot.lon : 73.8480;
-      let stopId = 4;
+      <!-- Floating Quick Map Filters / Layer Toggles -->
+      <div class="map-layers-dock">
+        <strong style="color:var(--text-main); display:block; margin-bottom:4px;">Map Layers</strong>
+        <label class="layer-toggle">
+          <input type="checkbox" id="layer-toggle-traffic" checked>
+          <span>Traffic Congestion</span>
+        </label>
+        <label class="layer-toggle">
+          <input type="checkbox" id="layer-toggle-baseline">
+          <span>Baseline Routes Overlay</span>
+        </label>
+      </div>
 
-      if (type === 'traffic_jam') {
-        desc = 'Severe Traffic Jam reported at Swargate ST Bus Stand & Chowk';
-        incLat = 18.4990;
-        incLon = 73.8570;
-        stopId = 29;
-      } else if (type === 'road_closure') {
-        desc = 'Main road closure reported on JM Road / Alka Talkies Chowk';
-        incLat = 18.5270;
-        incLon = 73.8450;
-        stopId = 10;
-      } else if (type === 'urgent_pickup') {
-        desc = 'Urgent overflow bins reported at Shaniwar Wada Heritage Concourse';
-        incLat = 18.5195;
-        incLon = 73.8553;
-        stopId = 1;
-      } else if (type === 'missed_stop') {
-        desc = 'Collection stop #4 (Tulshibaug Market) inaccessible';
-        incLat = 18.5173;
-        incLon = 73.8548;
-        stopId = 4;
-      }
+      <!-- Animated Truck Shift Simulation Dock -->
+      <div class="simulation-dock">
+        <button id="sim-play-btn" class="sim-btn" title="Play Shift Simulation" aria-label="Play Shift Simulation">
+          ▶️
+        </button>
+        <span id="sim-time-label" style="font-size:12px; font-weight:600; color:var(--text-main); white-space:nowrap;">
+          Shift: 0h 0m (0%)
+        </span>
+        <input type="range" id="sim-progress-slider" class="sim-slider" min="0" max="100" value="0">
+        <select id="sim-speed-select" class="form-select" style="padding:2px 6px; font-size:11px; width:65px;">
+          <option value="1">1x</option>
+          <option value="2">2x</option>
+          <option value="5" selected>5x</option>
+          <option value="10">10x</option>
+        </select>
+      </div>
+    </main>
 
-      try {
-        const resp = await fetch('/api/v1/incidents', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            incident_type: type,
-            description: desc,
-            lat: incLat,
-            lon: incLon,
-            stop_id: stopId
-          })
-        });
+  </div>
 
-        const res = await resp.json();
-        showToast(`Incident reported: ${desc}. Reoptimizing...`);
-        
-        // Reload dataset & trigger dynamic reoptimization
-        await loadDataset();
-        await triggerOptimization();
-      } catch (err) {
-        console.error(err);
-      }
-    }
+  <!-- Toast Notifications Container -->
+  <div id="toast-container" class="toast-container"></div>
 
-    function updateIncidentsUI() {
-      const countEl = document.getElementById('incidents-count');
-      const listEl = document.getElementById('incidents-list');
-      
-      if (!dataset || !dataset.incidents || dataset.incidents.length === 0) {
-        countEl.innerText = '0';
-        listEl.innerHTML = `<div style="font-size: 12px; color: var(--text-dim); text-align: center; padding: 16px;">No incidents reported. System operating normally.</div>`;
-        return;
-      }
+  <!-- Leaflet JS & MarkerCluster JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <!-- Main Application ES Module -->
+  <script type="module" src="/static/js/app.js"></script>
 
-      countEl.innerText = dataset.incidents.length;
-      listEl.innerHTML = '';
-
-      dataset.incidents.forEach(inc => {
-        const item = document.createElement('div');
-        item.style.cssText = 'background: rgba(255,255,255,0.03); border-left: 3px solid var(--accent-rose); padding: 8px 12px; border-radius: 6px; font-size: 12px;';
-        item.innerHTML = `
-          <div style="font-weight: 700; color: var(--accent-rose);">${inc.incident_type.toUpperCase()}</div>
-          <div style="color: var(--text-muted); font-size: 11px;">${inc.description}</div>
-          <div style="font-size: 10px; color: var(--text-dim); margin-top: 4px;">Reported: ${inc.timestamp}</div>
-        `;
-        listEl.appendChild(item);
-      });
-    }
-
-    // Reset dataset
-    async function resetDataset() {
-      try {
-        await fetch('/api/v1/reset-dataset', { method: 'POST' });
-        routesLayer.clearLayers();
-        document.getElementById('comparison-card').style.display = 'none';
-        document.getElementById('kpi-distance').innerText = '--';
-        document.getElementById('kpi-fuel').innerText = '--';
-        document.getElementById('kpi-co2').innerText = '--';
-        document.getElementById('kpi-cost').innerText = '--';
-        document.getElementById('kpi-distance-delta').innerText = 'Reset complete';
-        await loadDataset();
-        showToast('Dataset reset to default state.');
-      } catch (err) {
-        console.error(err);
-      }
-    }
-
-    // Switch Sidebar Tab
-    function switchTab(tab) {
-      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.sidebar-content').forEach(c => c.style.display = 'none');
-
-      if (tab === 'analytics') {
-        document.querySelectorAll('.tab-btn')[0].classList.add('active');
-        document.getElementById('tab-analytics').style.display = 'flex';
-      } else if (tab === 'fleet') {
-        document.querySelectorAll('.tab-btn')[1].classList.add('active');
-        document.getElementById('tab-fleet').style.display = 'flex';
-      } else if (tab === 'events') {
-        document.querySelectorAll('.tab-btn')[2].classList.add('active');
-        document.getElementById('tab-events').style.display = 'flex';
-      }
-      lucide.createIcons();
-    }
-
-    // Toast Banner
-    function showToast(msg) {
-      const banner = document.getElementById('toast-banner');
-      document.getElementById('toast-message').innerText = msg;
-      banner.style.display = 'flex';
-      setTimeout(() => {
-        banner.style.display = 'none';
-      }, 4000);
-    }
-
-    // Init on load
-    window.onload = () => {
-      initMap();
-      lucide.createIcons();
-    };
-  </script>
 </body>
 </html>

@@ -14,7 +14,7 @@ try:
     ORTOOLS_AVAILABLE = True
     logger.info("Google OR-Tools is installed and available.")
 except ImportError:
-    logger.warning("Google OR-Tools not yet found in current environment. Using high-performance Clarke-Wright + Local Search CVRP engine.")
+    logger.warning("Google OR-Tools not yet found in current environment. Using Clarke-Wright + Local Search CVRP engine.")
 
 def compute_route_fuel(
     stops: List[Dict[str, Any]],
@@ -45,11 +45,11 @@ def compute_route_fuel(
         # Free flow urban truck speed ~ 32 km/h (8.88 m/s). Any duration above free-flow is traffic delay
         free_flow_s = (dist_km / 32.0) * 3600.0 if dist_km > 0 else 0.0
         delay_hrs = max(0.0, (dur_s - free_flow_s) / 3600.0)
-        idling_delay_fuel += delay_hrs * 2.40  # Refuse truck burns ~2.4 L/hr idling
+        idling_delay_fuel += delay_hrs * settings.TRUCK_IDLE_FUEL_L_PER_HR
 
     # 3. Hydraulic packer compaction PTO fuel: ~0.035 Liters per collection stop
     actual_collection_stops = max(0, len(stops) - 2)
-    pto_compaction_fuel = actual_collection_stops * 0.035
+    pto_compaction_fuel = actual_collection_stops * settings.COMPACTOR_PTO_L_PER_STOP
 
     total_fuel = cruising_fuel + idling_delay_fuel + pto_compaction_fuel
     return {
@@ -66,6 +66,42 @@ class VrpSolverEngine:
     with an optimized Clarke-Wright Savings + 2-Opt local search fallback.
     """
 
+    def validate_inputs(
+        self,
+        depot_index: int,
+        locations: List[Dict[str, Any]],
+        vehicles: List[Dict[str, Any]],
+        distance_matrix: List[List[float]],
+        duration_matrix: List[List[float]]
+    ) -> Tuple[bool, Optional[str]]:
+        """Validates all input dimensions, bounds, and values before running solver."""
+        if not locations:
+            return False, "Locations list is empty."
+        if depot_index < 0 or depot_index >= len(locations):
+            return False, f"Invalid depot_index: {depot_index}. Must be between 0 and {len(locations)-1}."
+        if not vehicles:
+            return False, "At least one vehicle must be provided."
+        
+        n = len(locations)
+        if len(distance_matrix) != n or any(len(row) != n for row in distance_matrix):
+            return False, f"distance_matrix dimensions ({len(distance_matrix)}x?) do not match locations count ({n})."
+        if len(duration_matrix) != n or any(len(row) != n for row in duration_matrix):
+            return False, f"duration_matrix dimensions ({len(duration_matrix)}x?) do not match locations count ({n})."
+        
+        for idx, loc in enumerate(locations):
+            if "lat" not in loc or "lon" not in loc:
+                return False, f"Location at index {idx} missing lat or lon."
+            if float(loc.get("demand_kg", 0.0)) < 0:
+                loc["demand_kg"] = 0.0
+
+        for v in vehicles:
+            if float(v.get("capacity_kg", 0.0)) <= 0:
+                v["capacity_kg"] = 1500.0
+            if int(v.get("max_duration_sec", 0)) <= 0:
+                v["max_duration_sec"] = 28800
+
+        return True, None
+
     def solve_cvrp(
         self,
         depot_index: int,
@@ -74,12 +110,61 @@ class VrpSolverEngine:
         distance_matrix: List[List[float]],
         duration_matrix: List[List[float]],
         fuel_matrix: Optional[List[List[float]]] = None,
-        time_limit_sec: int = 10,
+        time_limit_sec: int = 15,
         objective: str = "fuel",
         optimize_fleet_size: bool = True
     ) -> Dict[str, Any]:
         start_time = time.time()
         
+        # 1. Validation
+        valid, err = self.validate_inputs(
+            depot_index=depot_index,
+            locations=locations,
+            vehicles=vehicles,
+            distance_matrix=distance_matrix,
+            duration_matrix=duration_matrix
+        )
+        if not valid:
+            logger.error(f"CVRP input validation error: {err}")
+            return {
+                "algorithm": "Validation Error",
+                "runtime_ms": int((time.time() - start_time) * 1000),
+                "routes": [],
+                "metrics": {
+                    "total_distance_km": 0.0,
+                    "total_travel_time_sec": 0,
+                    "total_service_time_sec": 0,
+                    "est_fuel_liters": 0.0,
+                    "fuel_breakdown": {"cruising_fuel_liters": 0.0, "traffic_idling_fuel_liters": 0.0, "compactor_pto_fuel_liters": 0.0},
+                    "est_co2_kg": 0.0,
+                    "est_total_cost": 0.0,
+                    "vehicles_used": 0,
+                    "vehicles_idle": len(vehicles),
+                    "vehicles_available": len(vehicles),
+                    "fleet_utilization_pct": 0.0,
+                    "stops_served": 0,
+                    "unserved_count": len(locations) - 1,
+                    "workload_balance_std_km": 0.0,
+                },
+                "unserved_indices": [i for i in range(len(locations)) if i != depot_index],
+                "unserved_stops": [
+                    {
+                        "location_id": locations[i].get("id"),
+                        "name": locations[i].get("name", f"Stop #{i}"),
+                        "lat": locations[i].get("lat"),
+                        "lon": locations[i].get("lon"),
+                        "demand_kg": locations[i].get("demand_kg", 0.0),
+                        "priority": locations[i].get("priority", 1),
+                        "reason": err
+                    }
+                    for i in range(len(locations)) if i != depot_index
+                ],
+                "error": err
+            }
+
+        # Clamp time limit between 1 and 60 seconds
+        time_limit_sec = max(1, min(time_limit_sec, 60))
+
         # Check if ortools is available at runtime
         global ORTOOLS_AVAILABLE
         if not ORTOOLS_AVAILABLE:
@@ -116,6 +201,49 @@ class VrpSolverEngine:
             start_time=start_time
         )
 
+    def _diagnose_unserved_stops(
+        self,
+        unserved_indices: List[int],
+        locations: List[Dict[str, Any]],
+        vehicles: List[Dict[str, Any]],
+        duration_matrix: List[List[float]],
+        depot_index: int,
+        total_served_demand: float
+    ) -> List[Dict[str, Any]]:
+        """Determines the specific operational reason each unserved stop could not be scheduled."""
+        total_fleet_capacity = sum(float(v.get("capacity_kg", 1500.0)) for v in vehicles)
+        remaining_fleet_cap = max(0.0, total_fleet_capacity - total_served_demand)
+        max_shift = max(float(v.get("max_duration_sec", 28800)) for v in vehicles) if vehicles else 28800
+
+        unserved_details = []
+        for idx in unserved_indices:
+            loc = locations[idx]
+            demand = float(loc.get("demand_kg", 0.0))
+            priority = int(loc.get("priority", 1))
+            svc_s = float(loc.get("service_time_sec", 90))
+            roundtrip_s = duration_matrix[depot_index][idx] + duration_matrix[idx][depot_index] + svc_s
+
+            if demand > remaining_fleet_cap:
+                reason = "capacity_exceeded"
+            elif roundtrip_s > max_shift:
+                reason = "shift_time_exceeded"
+            elif priority <= 2 and remaining_fleet_cap < 200.0:
+                reason = "priority_dropped"
+            else:
+                reason = "fleet_exhausted"
+
+            unserved_details.append({
+                "location_id": loc.get("id"),
+                "node_idx": idx,
+                "name": loc.get("name", f"Stop #{idx}"),
+                "lat": loc.get("lat"),
+                "lon": loc.get("lon"),
+                "demand_kg": demand,
+                "priority": priority,
+                "reason": reason
+            })
+        return unserved_details
+
     def _solve_with_ortools(
         self,
         depot_index: int,
@@ -151,7 +279,6 @@ class VrpSolverEngine:
 
         # 1. Cost Evaluator
         if objective == "fuel" and fuel_matrix:
-            # Scale liters * 1000 to milliliters integer cost
             int_fuel_matrix = [
                 [int(f * 1000.0) for f in row] for row in fuel_matrix
             ]
@@ -175,9 +302,6 @@ class VrpSolverEngine:
 
         # 2. Dynamic Fleet Sizing: Minimize number of vehicles used
         if optimize_fleet_size:
-            # Fixed vehicle dispatch cost equivalent to vehicle setup & driver shift overhead
-            # In fuel mode: 35,000 mL = 35 L diesel equivalent overhead
-            # In distance mode: 30,000 meters equivalent overhead
             fixed_cost = 35000 if (objective == "fuel" and fuel_matrix) else 30000
             routing.SetFixedCostOfAllVehicles(fixed_cost)
 
@@ -198,7 +322,7 @@ class VrpSolverEngine:
             "Capacity"
         )
 
-        # 4. Time / Shift Duration Dimension (optional constraint)
+        # 4. Time / Shift Duration Dimension
         def time_callback(from_index, to_index):
             from_node = manager.IndexToNode(from_index)
             to_node = manager.IndexToNode(to_index)
@@ -210,19 +334,13 @@ class VrpSolverEngine:
         max_durations = [int(v.get("max_duration_sec", 28800)) for v in vehicles]
         routing.AddDimensionWithVehicleCapacity(
             time_callback_index,
-            3600,  # allow 1 hour slack for waiting
+            3600,  # 1 hour slack for waiting
             max_durations,
             False,
             "Time"
         )
 
-        # 4. Disjunctions & Penalty-Weighted Drop Handling
-        # Allows OR-Tools to gracefully handle capacity/time constraints without failing.
-        # High priority collection points have higher drop penalties:
-        # Priority 1: 50,000 (standard penalty)
-        # Priority 2: 150,000
-        # Priority 3: 350,000
-        # Priority 4: 1,000,000 (urgent - strongly penalized if skipped)
+        # 5. Disjunctions & Penalty-Weighted Drop Handling
         for node in range(num_nodes):
             if node != depot_index:
                 p = int(locations[node].get("priority", 1))
@@ -230,8 +348,7 @@ class VrpSolverEngine:
                 penalty = penalty_weights.get(p, 50000)
                 routing.AddDisjunction([manager.NodeToIndex(node)], penalty)
 
-        # 5. Search Parameters as specified in Blueprint Section 4.3 & 5.5:
-        # PATH_CHEAPEST_ARC + GUIDED_LOCAL_SEARCH
+        # 6. Search Parameters
         search_parameters = pywrapcp.DefaultRoutingSearchParameters()
         search_parameters.first_solution_strategy = (
             routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
@@ -239,13 +356,13 @@ class VrpSolverEngine:
         search_parameters.local_search_metaheuristic = (
             routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
         )
-        search_parameters.time_limit.seconds = min(time_limit_sec, 60)
+        search_parameters.time_limit.seconds = time_limit_sec
 
         # Solve
         solution = routing.SolveWithParameters(search_parameters)
 
         if not solution:
-            logger.warning("OR-Tools could not find a complete solution. Falling back to Clarke-Wright.")
+            logger.warning("OR-Tools could not find a solution. Falling back to Clarke-Wright.")
             return self._solve_with_clark_wright(
                 depot_index, locations, vehicles, distance_matrix, duration_matrix, start_time
             )
@@ -302,7 +419,7 @@ class VrpSolverEngine:
                 route_dist += distance_matrix[node_index][next_node]
                 total_travel_time_s += duration_matrix[node_index][next_node]
 
-            # Add final depot return
+            # Final depot return
             end_node = manager.IndexToNode(index)
             stop_indices.append(end_node)
             final_load = solution.Value(capacity_dimension.CumulVar(index))
@@ -320,7 +437,7 @@ class VrpSolverEngine:
                 "cumulative_kg": float(final_load),
             })
 
-            if len(stop_indices) > 2:  # More than just start depot -> end depot
+            if len(stop_indices) > 2:  # Active vehicle route
                 total_distance_m += route_dist
                 vehicle_distances.append(route_dist / 1000.0)
                 v_cap = float(v_info.get("capacity_kg", 1500.0))
@@ -358,7 +475,17 @@ class VrpSolverEngine:
             std_dist = 0.0
 
         all_target_nodes = set(i for i in range(num_nodes) if i != depot_index)
-        unserved_indices = list(all_target_nodes - served_nodes)
+        unserved_indices = sorted(list(all_target_nodes - served_nodes))
+
+        total_served_demand = sum(r["total_demand_kg"] for r in routes)
+        unserved_stops_info = self._diagnose_unserved_stops(
+            unserved_indices=unserved_indices,
+            locations=locations,
+            vehicles=vehicles,
+            duration_matrix=duration_matrix,
+            depot_index=depot_index,
+            total_served_demand=total_served_demand
+        )
 
         vehicles_used = len(routes)
         vehicles_idle = max(0, num_vehicles - vehicles_used)
@@ -380,6 +507,8 @@ class VrpSolverEngine:
                 },
                 "est_co2_kg": round(est_co2_kg, 2),
                 "est_total_cost": round(est_total_cost, 2),
+                "currency_symbol": settings.CURRENCY_SYMBOL,
+                "currency_code": settings.CURRENCY_CODE,
                 "vehicles_used": vehicles_used,
                 "vehicles_idle": vehicles_idle,
                 "vehicles_available": num_vehicles,
@@ -388,7 +517,8 @@ class VrpSolverEngine:
                 "unserved_count": len(unserved_indices),
                 "workload_balance_std_km": round(std_dist, 2),
             },
-            "unserved_indices": unserved_indices
+            "unserved_indices": unserved_indices,
+            "unserved_stops": unserved_stops_info
         }
 
     def _solve_with_clark_wright(
@@ -424,7 +554,6 @@ class VrpSolverEngine:
             c: float(locations[c].get("demand_kg", 0.0)) for c in customers
         }
         
-        # Max capacity across available vehicles
         vehicle_caps = sorted([float(v.get("capacity_kg", 1500.0)) for v in vehicles], reverse=True)
         max_cap = vehicle_caps[0] if vehicle_caps else 1500.0
 
@@ -439,7 +568,6 @@ class VrpSolverEngine:
             if combined_demand > max_cap:
                 continue
 
-            # Merge conditions: i is end of route_i and j is start of route_j (or vice versa)
             if route_i[-1] == i and route_j[0] == j:
                 merged = route_i + route_j
             elif route_j[-1] == j and route_i[0] == i:
@@ -451,7 +579,6 @@ class VrpSolverEngine:
             else:
                 continue
 
-            # Update maps
             first_node = merged[0]
             route_demands[first_node] = combined_demand
             for node in merged:
@@ -467,7 +594,7 @@ class VrpSolverEngine:
                 seen_refs.add(r_id)
                 unique_route_lists.append(r)
 
-        # 2-Opt local search improvement on each route
+        # 2-Opt local search improvement
         def two_opt(route: List[int]) -> List[int]:
             best = list(route)
             improved = True
@@ -477,12 +604,10 @@ class VrpSolverEngine:
                     for b in range(a + 1, len(best)):
                         if b - a == 1:
                             continue
-                        # Current distance
                         curr_d = (
                             distance_matrix[best[a-1]][best[a]] +
                             distance_matrix[best[b-1]][best[b if b < len(best) else depot_index]]
                         )
-                        # New distance if reversed
                         rev_d = (
                             distance_matrix[best[a-1]][best[b-1]] +
                             distance_matrix[best[a]][best[b if b < len(best) else depot_index]]
@@ -508,6 +633,7 @@ class VrpSolverEngine:
             
             r_nodes = improved_routes[v_idx]
             v_id = v["id"]
+            v_cap = float(v.get("capacity_kg", 1500.0))
             
             route_dist = 0.0
             route_time = 0.0
@@ -577,23 +703,31 @@ class VrpSolverEngine:
             total_travel_time_s += (route_time - len(r_nodes) * 90)
             vehicle_distances.append(route_dist / 1000.0)
 
+            r_fuel = compute_route_fuel(stop_details, distance_matrix, duration_matrix, v_cap)
+
             assigned_routes.append({
                 "vehicle_id": v_id,
                 "vehicle_name": v.get("name"),
-                "vehicle_capacity_kg": v.get("capacity_kg"),
+                "vehicle_capacity_kg": v_cap,
                 "total_distance_m": round(route_dist, 1),
                 "total_duration_sec": int(route_time),
                 "total_demand_kg": round(curr_load, 1),
                 "stops": stop_details,
                 "stop_indices": stop_indices,
+                "fuel": r_fuel,
             })
 
         runtime_ms = int((time.time() - start_time) * 1000)
         total_dist_km = total_distance_m / 1000.0
-        est_fuel_liters = total_dist_km * settings.FUEL_L_PER_KM
-        est_co2_kg = est_fuel_liters * settings.CO2_KG_PER_L
+
+        total_fuel_liters = sum(r["fuel"]["total_fuel_liters"] for r in assigned_routes)
+        total_cruise_fuel = sum(r["fuel"]["cruising_fuel_liters"] for r in assigned_routes)
+        total_idle_fuel = sum(r["fuel"]["traffic_idling_fuel_liters"] for r in assigned_routes)
+        total_pto_fuel = sum(r["fuel"]["compactor_pto_fuel_liters"] for r in assigned_routes)
+
+        est_co2_kg = total_fuel_liters * settings.CO2_KG_PER_L
         driver_hours = (total_travel_time_s + total_service_time_s) / 3600.0
-        est_total_cost = (est_fuel_liters * settings.FUEL_COST_PER_L) + (driver_hours * settings.DRIVER_HOURLY_RATE)
+        est_total_cost = (total_fuel_liters * settings.FUEL_COST_PER_L) + (driver_hours * settings.DRIVER_HOURLY_RATE)
 
         if vehicle_distances:
             mean_dist = sum(vehicle_distances) / len(vehicle_distances)
@@ -603,7 +737,17 @@ class VrpSolverEngine:
             std_dist = 0.0
 
         all_target_nodes = set(customers)
-        unserved_indices = list(all_target_nodes - served_nodes)
+        unserved_indices = sorted(list(all_target_nodes - served_nodes))
+
+        total_served_demand = sum(r["total_demand_kg"] for r in assigned_routes)
+        unserved_stops_info = self._diagnose_unserved_stops(
+            unserved_indices=unserved_indices,
+            locations=locations,
+            vehicles=vehicles,
+            duration_matrix=duration_matrix,
+            depot_index=depot_index,
+            total_served_demand=total_served_demand
+        )
 
         return {
             "algorithm": "Clarke-Wright Savings CVRP + 2-Opt Local Search",
@@ -613,15 +757,26 @@ class VrpSolverEngine:
                 "total_distance_km": round(total_dist_km, 2),
                 "total_travel_time_sec": int(total_travel_time_s),
                 "total_service_time_sec": int(total_service_time_s),
-                "est_fuel_liters": round(est_fuel_liters, 2),
+                "est_fuel_liters": round(total_fuel_liters, 2),
+                "fuel_breakdown": {
+                    "cruising_fuel_liters": round(total_cruise_fuel, 2),
+                    "traffic_idling_fuel_liters": round(total_idle_fuel, 2),
+                    "compactor_pto_fuel_liters": round(total_pto_fuel, 2),
+                },
                 "est_co2_kg": round(est_co2_kg, 2),
                 "est_total_cost": round(est_total_cost, 2),
+                "currency_symbol": settings.CURRENCY_SYMBOL,
+                "currency_code": settings.CURRENCY_CODE,
                 "vehicles_used": len(assigned_routes),
+                "vehicles_idle": max(0, len(vehicles) - len(assigned_routes)),
+                "vehicles_available": len(vehicles),
+                "fleet_utilization_pct": round((len(assigned_routes) / max(1, len(vehicles))) * 100.0, 1),
                 "stops_served": len(served_nodes),
                 "unserved_count": len(unserved_indices),
                 "workload_balance_std_km": round(std_dist, 2),
             },
-            "unserved_indices": unserved_indices
+            "unserved_indices": unserved_indices,
+            "unserved_stops": unserved_stops_info
         }
 
 vrp_solver = VrpSolverEngine()

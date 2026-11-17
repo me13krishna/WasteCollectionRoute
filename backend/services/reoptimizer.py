@@ -73,7 +73,7 @@ class DynamicReoptimizer:
         depot_res = await db.execute(select(Depot).where(Depot.is_active == True))
         depot = depot_res.scalars().first()
         if not depot:
-            depot_data = {"id": 0, "name": "Central Municipal Depot", "lat": 12.9716, "lon": 77.5946}
+            depot_data = {"id": 0, "name": "PMC Central Solid Waste Transfer Depot", "lat": 18.5284, "lon": 73.8480}
         else:
             depot_data = {"id": depot.id, "name": depot.name, "lat": depot.lat, "lon": depot.lon}
 

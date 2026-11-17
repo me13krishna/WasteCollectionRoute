@@ -11,35 +11,47 @@ services:
       - "8000:8000"
     environment:
       - PROJECT_NAME=EcoRoute AI - Municipal Waste Collection
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/ecoroute
-      - OSRM_BASE_URL=http://osrm:5000
-      - FUEL_L_PER_KM=0.45
+      - DATABASE_URL=sqlite:///./waste_route.db
+      - OSRM_BASE_URL=https://router.project-osrm.org
+      - CURRENCY_SYMBOL=₹
+      - CURRENCY_CODE=INR
+      - FUEL_L_PER_KM=0.42
       - CO2_KG_PER_L=2.68
-      - FUEL_COST_PER_L=1.35
-      - DRIVER_HOURLY_RATE=22.50
+      - FUEL_COST_PER_L=94.50
+      - DRIVER_HOURLY_RATE=250.00
     volumes:
       - ./backend/data:/app/backend/data
-    depends_on:
-      - db
-      - osrm
+      - ecoroute_data:/app
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/dataset || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
 
-  # --- 2. 100% Free Self-Hosted Road Network Routing Engine (OSRM) ---
+  # --- 2. Optional: Self-Hosted OSRM Road Network Routing Engine ---
+  # Run with: docker-compose --profile self-hosted-osrm up
+  # See docs/OSRM_SETUP.md for preparing maharashtra-latest.osm.pbf
   osrm:
     image: ghcr.io/project-osrm/osrm-backend:latest
     container_name: ecoroute_osrm
+    profiles:
+      - self-hosted-osrm
     ports:
       - "5000:5000"
     volumes:
       - ./osrm-data:/data
-    # Command to run OSRM routed server on prepared map extract
-    command: osrm-routed --algorithm mld /data/district.osrm
+    command: osrm-routed --algorithm mld /data/pune.osrm
     restart: unless-stopped
 
-  # --- 3. Open-Source Spatial Database (PostgreSQL 16 + PostGIS) ---
+  # --- 3. Optional: Spatial Database (PostgreSQL 16 + PostGIS) ---
+  # Run with: docker-compose --profile postgis up
   db:
     image: postgis/postgis:16-3.4-alpine
     container_name: ecoroute_postgis
+    profiles:
+      - postgis
     ports:
       - "5432:5432"
     environment:
@@ -48,7 +60,13 @@ services:
       - POSTGRES_DB=ecoroute
     volumes:
       - postgis_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ecoroute"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
 volumes:
+  ecoroute_data:
   postgis_data:
