@@ -543,6 +543,10 @@
       <div style="font-size: 12px; color: var(--text-muted); margin-right: 12px;">
         <span style="color: var(--accent-emerald); font-weight: 700;">● Google OR-Tools</span> Engine Active
       </div>
+      <button class="btn btn-secondary" onclick="promptOsmCityIngest()" title="Ingest real bins and streets using OpenStreetMap Overpass API (Free)">
+        <i data-lucide="globe" style="width: 15px; height: 15px; color: var(--accent-cyan);"></i>
+        OSM City Ingest
+      </button>
       <button class="btn btn-secondary" onclick="resetDataset()">
         <i data-lucide="rotate-ccw" style="width: 15px; height: 15px;"></i>
         Reset
@@ -604,6 +608,43 @@
       <!-- Tab 1: Analytics & Baseline Comparison -->
       <div class="sidebar-content" id="tab-analytics">
         
+        <!-- Live Traffic & Optimization Controls -->
+        <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 10px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 12px; font-weight: 700; color: var(--accent-cyan); display: flex; align-items: center; gap: 6px;">
+              <i data-lucide="activity" style="width: 14px; height: 14px;"></i> Live Traffic & Fleet Controls
+            </span>
+            <span id="live-traffic-badge" style="font-size: 10px; padding: 2px 7px; border-radius: 12px; background: rgba(16,185,129,0.15); color: var(--accent-emerald); font-weight: 600;">
+              🟢 Live Traffic: Active
+            </span>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 4px;">
+            <label style="font-size: 11px; color: var(--text-muted); font-weight: 600;">Optimization Objective</label>
+            <select id="opt-objective" style="background: var(--bg-surface-elevated); border: 1px solid var(--border-color); color: var(--text-main); font-size: 12px; padding: 6px 10px; border-radius: 6px; outline: none;">
+              <option value="fuel" selected>⛽ Maximize Fuel Efficiency (Load & Traffic Aware)</option>
+              <option value="traffic_duration">⏱️ Minimize Travel & Collection Time</option>
+              <option value="distance">📏 Minimize Total Road Distance</option>
+            </select>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 4px;">
+            <label style="font-size: 11px; color: var(--text-muted); font-weight: 600;">Fleet Sizing Strategy</label>
+            <select id="opt-fleet-mode" style="background: var(--bg-surface-elevated); border: 1px solid var(--border-color); color: var(--text-main); font-size: 12px; padding: 6px 10px; border-radius: 6px; outline: none;">
+              <option value="auto_minimize_vehicles" selected>⚡ Auto-Minimize Fleet (Depot Savings)</option>
+              <option value="fixed_fleet">⚖️ Distribute Across All Trucks</option>
+            </select>
+          </div>
+
+          <div style="display: flex; justify-content: space-between; align-items: center; padding-top: 4px;">
+            <label style="font-size: 11px; color: var(--text-muted); font-weight: 600; display: flex; align-items: center; gap: 6px; cursor: pointer;">
+              <input type="checkbox" id="traffic-toggle" checked style="accent-color: var(--accent-emerald); cursor: pointer;">
+              Real-Time Traffic Congestion Delays
+            </label>
+            <span id="traffic-period-label" style="font-size: 10px; color: var(--text-dim);">Live Sync</span>
+          </div>
+        </div>
+
         <!-- Comparison Card -->
         <div class="comparison-card" id="comparison-card" style="display: none;">
           <div class="comparison-header">
@@ -626,6 +667,23 @@
               <!-- Dynamically populated -->
             </tbody>
           </table>
+
+          <!-- 100% Free Open-Source Exports -->
+          <div id="export-section" style="display: none; padding-top: 12px; border-top: 1px solid var(--border-color); margin-top: 12px;">
+            <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 8px;">
+              Free Open-Source Plan Exports
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <a href="/api/v1/export/geojson" target="_blank" class="btn btn-secondary" style="flex: 1; text-decoration: none; justify-content: center; font-size: 11px; padding: 7px 10px;">
+                <i data-lucide="map" style="width: 13px; height: 13px; color: var(--accent-cyan);"></i>
+                GeoJSON (QGIS)
+              </a>
+              <a href="/api/v1/export/manifest" target="_blank" class="btn btn-secondary" style="flex: 1; text-decoration: none; justify-content: center; font-size: 11px; padding: 7px 10px;">
+                <i data-lucide="file-spreadsheet" style="width: 13px; height: 13px; color: var(--accent-emerald);"></i>
+                Driver Manifest
+              </a>
+            </div>
+          </div>
         </div>
 
         <!-- System Architecture Note for Mentor Presentation -->
@@ -669,17 +727,21 @@
             Simulate real-world operational changes to demonstrate how the software dynamically re-routes without physical sensors:
           </p>
           <div class="event-buttons">
+            <button class="btn btn-secondary" onclick="simulateIncident('traffic_jam')">
+              <i data-lucide="traffic-cone" style="width: 14px; height: 14px; color: var(--accent-amber);"></i>
+              Report Traffic Jam (Swargate Junction)
+            </button>
             <button class="btn btn-secondary" onclick="simulateIncident('road_closure')">
               <i data-lucide="shield-alert" style="width: 14px; height: 14px; color: var(--accent-rose);"></i>
-              Report Road Closure (Indiranagar 100ft)
+              Report Road Closure (JM Road / Deccan)
             </button>
             <button class="btn btn-secondary" onclick="simulateIncident('urgent_pickup')">
               <i data-lucide="plus-circle" style="width: 14px; height: 14px; color: var(--accent-amber);"></i>
-              Add Emergency High-Priority Pickup
+              Add Emergency High-Priority Pickup (Shaniwar Wada)
             </button>
             <button class="btn btn-secondary" onclick="simulateIncident('missed_stop')">
               <i data-lucide="x-circle" style="width: 14px; height: 14px; color: var(--accent-cyan);"></i>
-              Mark Collection Point As Missed
+              Mark Collection Point #4 (Tulshibaug) Missed
             </button>
           </div>
         </div>
@@ -715,17 +777,18 @@
     let map;
     let markersLayer = L.layerGroup();
     let routesLayer = L.layerGroup();
+    let trafficLayer = L.layerGroup();
     let depotMarker = null;
     let dataset = null;
     let lastOptimizationResult = null;
 
     // Initialize Map
     function initMap() {
-      // Centered on Bangalore Central District Demo Zone
+      // Centered on Pune Central Solid Waste District
       map = L.map('map', {
         zoomControl: false,
         attributionControl: true
-      }).setView([12.9716, 77.5946], 13);
+      }).setView([18.5284, 73.8480], 13);
 
       // Add Zoom Control to bottom-right
       L.control.zoom({ position: 'bottomright' }).addTo(map);
@@ -758,13 +821,15 @@
 
       const overlayMaps = {
         "📍 Collection Points & Depot": markersLayer,
-        "🚛 Optimized Truck Routes": routesLayer
+        "🚛 Optimized Truck Routes": routesLayer,
+        "🚦 Real-Time Traffic Flow": trafficLayer
       };
 
       L.control.layers(baseMaps, overlayMaps, { position: 'topright' }).addTo(map);
 
       markersLayer.addTo(map);
       routesLayer.addTo(map);
+      trafficLayer.addTo(map);
 
       loadDataset();
     }
@@ -774,9 +839,28 @@
       try {
         const resp = await fetch('/api/v1/dataset');
         dataset = await resp.json();
+        if (dataset && dataset.depot) {
+          map.setView([dataset.depot.lat, dataset.depot.lon], 13);
+        }
         renderDatasetOnMap();
         updateIncidentsUI();
         lucide.createIcons();
+
+        // Fetch real-time traffic status
+        fetch('/api/v1/traffic/status')
+          .then(r => r.json())
+          .then(t => {
+            if (t.success) {
+              const badge = document.getElementById('live-traffic-badge');
+              if (badge) {
+                badge.innerText = `🚦 ${t.period_name} (${t.base_congestion_factor}x)`;
+                badge.style.background = t.base_congestion_factor > 1.5 ? 'rgba(244,63,94,0.15)' : 'rgba(16,185,129,0.15)';
+                badge.style.color = t.base_congestion_factor > 1.5 ? 'var(--accent-rose)' : 'var(--accent-emerald)';
+              }
+              const periodLbl = document.getElementById('traffic-period-label');
+              if (periodLbl) periodLbl.innerText = `${t.current_time} - ${t.period_name}`;
+            }
+          }).catch(console.error);
       } catch (err) {
         console.error('Failed to load dataset:', err);
       }
@@ -869,20 +953,51 @@
       btn.innerHTML = `<i data-lucide="loader-2" class="spin" style="width: 15px; height: 15px;"></i> Solving...`;
       btn.disabled = true;
 
+      const objVal = document.getElementById('opt-objective') ? document.getElementById('opt-objective').value : 'fuel';
+      const fleetMode = document.getElementById('opt-fleet-mode') ? document.getElementById('opt-fleet-mode').value : 'auto_minimize_vehicles';
+      const trafficOn = document.getElementById('traffic-toggle') ? document.getElementById('traffic-toggle').checked : true;
+
       try {
         const resp = await fetch('/api/v1/optimize', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             selected_stop_count: 50,
-            objective: 'distance',
+            objective: objVal,
             time_limit_sec: 10,
-            active_vehicles_count: 4
+            active_vehicles_count: 4,
+            fleet_mode: fleetMode,
+            traffic_enabled: trafficOn
           })
         });
 
         const data = await resp.json();
         lastOptimizationResult = data;
+
+        // Update Traffic HUD Badge
+        if (data.traffic) {
+          const badge = document.getElementById('live-traffic-badge');
+          if (badge) {
+            badge.innerText = `🚦 ${data.traffic.period_name} (${data.traffic.avg_congestion_index}x)`;
+            badge.style.background = data.traffic.avg_congestion_index > 1.5 ? 'rgba(244,63,94,0.15)' : 'rgba(16,185,129,0.15)';
+            badge.style.color = data.traffic.avg_congestion_index > 1.5 ? 'var(--accent-rose)' : 'var(--accent-emerald)';
+          }
+          const periodLbl = document.getElementById('traffic-period-label');
+          if (periodLbl) periodLbl.innerText = `${data.traffic.current_time} - ${data.traffic.period_name}`;
+        }
+
+        // Render Traffic Overlay on Map
+        if (data.traffic_overlay && data.traffic_overlay.length > 0) {
+          trafficLayer.clearLayers();
+          data.traffic_overlay.forEach(seg => {
+            L.polyline([seg.from_coord, seg.to_coord], {
+              color: seg.color,
+              weight: 3.5,
+              opacity: 0.65,
+              dashArray: '5, 8'
+            }).addTo(trafficLayer);
+          });
+        }
 
         // Render Routes
         renderRoutesOnMap(data.solution.routes);
@@ -893,10 +1008,15 @@
         // Update Comparison Table
         renderComparisonTable(data.comparison);
 
+        // Reveal Open-Source Export Section
+        const expSec = document.getElementById('export-section');
+        if (expSec) expSec.style.display = 'block';
+
         // Update Fleet List
         renderFleetList(data.solution.routes);
 
-        showToast(`Optimization complete! Guided Local Search improved routes by ${data.comparison.savings.distance_percent}%.`);
+        const vehSavedMsg = data.comparison.savings.vehicles_saved > 0 ? ` (${data.comparison.savings.vehicles_saved} surplus trucks kept at depot!)` : '';
+        showToast(`Optimization complete! Fuel reduced by ${data.comparison.savings.fuel_percent}%${vehSavedMsg}.`);
       } catch (err) {
         console.error('Optimization error:', err);
         showToast('Error during route optimization.');
@@ -970,7 +1090,15 @@
       const s = comparison.savings;
 
       const body = document.getElementById('comparison-body');
+      const vehBadge = s.vehicles_saved > 0 ? `<span class="saving-badge" style="background:rgba(16,185,129,0.2); color:var(--accent-emerald);">${s.vehicles_saved} Trucks Saved in Depot</span>` : `<span style="font-size:11px; color:var(--text-muted);">Optimal Fleet</span>`;
+
       body.innerHTML = `
+        <tr>
+          <td>Active Fleet Dispatched</td>
+          <td>${b.vehicles_used} / ${s.fleet_available || 4} Trucks</td>
+          <td style="font-weight:700; color:var(--accent-emerald);">${o.vehicles_used} Trucks</td>
+          <td>${vehBadge}</td>
+        </tr>
         <tr>
           <td>Total Road Distance</td>
           <td>${b.total_distance_km} km</td>
@@ -978,7 +1106,7 @@
           <td><span class="saving-badge">-${s.distance_percent}%</span></td>
         </tr>
         <tr>
-          <td>Estimated Diesel Fuel</td>
+          <td>Diesel Fuel (Load + Traffic Delay)</td>
           <td>${b.est_fuel_liters} L</td>
           <td style="font-weight:700; color:var(--accent-emerald);">${o.est_fuel_liters} L</td>
           <td><span class="saving-badge">-${s.fuel_percent}%</span></td>
@@ -990,7 +1118,7 @@
           <td><span class="saving-badge">-${s.co2_percent}%</span></td>
         </tr>
         <tr>
-          <td>Operating Cost</td>
+          <td>Operating Cost (Fuel + Labor)</td>
           <td>$${b.est_total_cost}</td>
           <td style="font-weight:700; color:var(--accent-emerald);">$${o.est_total_cost}</td>
           <td><span class="saving-badge">-$${s.cost_dollars}</span></td>
@@ -1069,15 +1197,67 @@
       });
     }
 
+    // Ingest real OpenStreetMap points using 100% Free Overpass API
+    async function promptOsmCityIngest() {
+      const city = prompt("Enter city name to ingest real OSM municipal points (100% Free Overpass API):", "Pune");
+      if (!city) return;
+
+      showToast(`Querying OpenStreetMap Overpass API for ${city}...`);
+      try {
+        const resp = await fetch('/api/v1/osm/extract', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            city: city,
+            radius_meters: 5000,
+            limit: 50
+          })
+        });
+        const res = await resp.json();
+        if (res.success) {
+          routesLayer.clearLayers();
+          const compCard = document.getElementById('comparison-card');
+          if (compCard) compCard.style.display = 'none';
+          const expSec = document.getElementById('export-section');
+          if (expSec) expSec.style.display = 'none';
+          await loadDataset();
+          showToast(`Ingested ${res.total_stops} real OpenStreetMap points for ${res.city}! Click Optimize Routes.`);
+        } else {
+          showToast(`Failed to extract OSM data: ${res.detail || 'Unknown error'}`);
+        }
+      } catch (err) {
+        console.error(err);
+        showToast('Error querying OpenStreetMap Overpass API.');
+      }
+    }
+
     // Simulate Incident
     async function simulateIncident(type) {
       let desc = '';
-      if (type === 'road_closure') {
-        desc = 'Main road closure reported at Indiranagar 100ft road junction';
+      let incLat = (dataset && dataset.depot) ? dataset.depot.lat : 18.5284;
+      let incLon = (dataset && dataset.depot) ? dataset.depot.lon : 73.8480;
+      let stopId = 4;
+
+      if (type === 'traffic_jam') {
+        desc = 'Severe Traffic Jam reported at Swargate ST Bus Stand & Chowk';
+        incLat = 18.4990;
+        incLon = 73.8570;
+        stopId = 29;
+      } else if (type === 'road_closure') {
+        desc = 'Main road closure reported on JM Road / Alka Talkies Chowk';
+        incLat = 18.5270;
+        incLon = 73.8450;
+        stopId = 10;
       } else if (type === 'urgent_pickup') {
-        desc = 'Urgent overflow bins reported at Commercial Plaza';
+        desc = 'Urgent overflow bins reported at Shaniwar Wada Heritage Concourse';
+        incLat = 18.5195;
+        incLon = 73.8553;
+        stopId = 1;
       } else if (type === 'missed_stop') {
-        desc = 'Collection stop #12 inaccessible due to street event';
+        desc = 'Collection stop #4 (Tulshibaug Market) inaccessible';
+        incLat = 18.5173;
+        incLon = 73.8548;
+        stopId = 4;
       }
 
       try {
@@ -1087,9 +1267,9 @@
           body: JSON.stringify({
             incident_type: type,
             description: desc,
-            lat: 12.9750,
-            lon: 77.6010,
-            stop_id: 12
+            lat: incLat,
+            lon: incLon,
+            stop_id: stopId
           })
         });
 

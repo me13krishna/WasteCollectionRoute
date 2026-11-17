@@ -37,6 +37,8 @@ class MatrixCache:
 class RoutingMatrixService:
     def __init__(self, base_url: Optional[str] = None):
         self.base_url = (base_url or settings.OSRM_BASE_URL).rstrip("/")
+        self._service_reachable: bool = True
+        self._last_checked: float = 0.0
 
     async def get_distance_and_duration_matrix(
         self, coordinates: List[Tuple[float, float]]
@@ -56,27 +58,30 @@ class RoutingMatrixService:
         if cached:
             return cached
 
-        # Try fetching from OSRM table service
-        try:
-            # OSRM expects lon,lat;lon,lat;...
-            coords_str = ";".join([f"{lon:.6f},{lat:.6f}" for lat, lon in coordinates])
-            url = f"{self.base_url}/table/v1/driving/{coords_str}?annotations=distance,duration"
-            
-            async with httpx.AsyncClient(timeout=8.0) as client:
-                resp = await client.get(url)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data.get("code") == "Ok":
-                        distances = data.get("distances", [])
-                        durations = data.get("durations", [])
-                        if distances and durations and len(distances) == n:
-                            # Sanitize nulls if any
-                            clean_dist = [[d if d is not None else 0.0 for d in row] for row in distances]
-                            clean_dur = [[d if d is not None else 0.0 for d in row] for row in durations]
-                            MatrixCache.set(cache_key, (clean_dist, clean_dur))
-                            return clean_dist, clean_dur
-        except Exception as e:
-            logger.warning(f"OSRM Table service request failed: {e}. Falling back to road-network topology simulation.")
+        # Try fetching from OSRM table service if reachable
+        now = time.time()
+        if self._service_reachable or (now - self._last_checked > 60.0):
+            try:
+                coords_str = ";".join([f"{lon:.6f},{lat:.6f}" for lat, lon in coordinates])
+                url = f"{self.base_url}/table/v1/driving/{coords_str}?annotations=distance,duration"
+                
+                async with httpx.AsyncClient(timeout=1.5) as client:
+                    resp = await client.get(url)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if data.get("code") == "Ok":
+                            distances = data.get("distances", [])
+                            durations = data.get("durations", [])
+                            if distances and durations and len(distances) == n:
+                                clean_dist = [[d if d is not None else 0.0 for d in row] for row in distances]
+                                clean_dur = [[d if d is not None else 0.0 for d in row] for row in durations]
+                                MatrixCache.set(cache_key, (clean_dist, clean_dur))
+                                self._service_reachable = True
+                                return clean_dist, clean_dur
+            except Exception as e:
+                self._service_reachable = False
+                self._last_checked = now
+                logger.info("OSRM online service unreachable; using ultra-fast local urban road-network simulation.")
 
         # Road-Network Fallback Approximation:
         # Urban collection routes typically exhibit a circuity factor of 1.25 - 1.40 over Haversine
@@ -118,20 +123,21 @@ class RoutingMatrixService:
         if len(coordinates) < 2:
             return [[lon, lat] for lat, lon in coordinates]
 
-        try:
-            # Chunking if route is large
-            coords_str = ";".join([f"{lon:.6f},{lat:.6f}" for lat, lon in coordinates])
-            url = f"{self.base_url}/route/v1/driving/{coords_str}?overview=full&geometries=geojson"
+        if self._service_reachable:
+            try:
+                coords_str = ";".join([f"{lon:.6f},{lat:.6f}" for lat, lon in coordinates])
+                url = f"{self.base_url}/route/v1/driving/{coords_str}?overview=full&geometries=geojson"
 
-            async with httpx.AsyncClient(timeout=8.0) as client:
-                resp = await client.get(url)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data.get("code") == "Ok" and data.get("routes"):
-                        geometry = data["routes"][0]["geometry"]["coordinates"]
-                        return geometry
-        except Exception as e:
-            logger.warning(f"OSRM Route geometry service failed: {e}. Generating curved road path.")
+                async with httpx.AsyncClient(timeout=1.5) as client:
+                    resp = await client.get(url)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if data.get("code") == "Ok" and data.get("routes"):
+                            geometry = data["routes"][0]["geometry"]["coordinates"]
+                            return geometry
+            except Exception as e:
+                self._service_reachable = False
+                logger.info("OSRM route geometry service unavailable; using curved road path.")
 
         # Road curvature interpolation fallback:
         # Generates intermediate points conforming to urban street grid

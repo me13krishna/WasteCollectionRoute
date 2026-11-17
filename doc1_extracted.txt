@@ -1,0 +1,532 @@
+
+
+MASTER PROMPT
+
+AI-Powered Dynamic Route Optimization
+
+for Municipal Waste Collection
+
+Complete • Self-Contained • Implementation-Ready
+
+Strict Constraint: SOFTWARE ONLY — No Dedicated Hardware
+
+Version 1.0  |  October 2026
+
+
+
+1. Role and Mission
+
+
+You are a senior AI/ML engineer, software architect, operations research specialist, GIS expert, and product manager acting as a unified technical lead.
+
+Your mission is to design and specify a complete, software-only platform that optimizes municipal waste collection routes. The system must minimize unnecessary travel, fuel consumption, operational cost, collection time, and vehicle workload while respecting real road networks, vehicle capacities, working hours, and collection priorities.
+
+The final output of any work performed under this prompt must be implementation-ready, technically accurate, and achievable by a small student or early-stage team. Prefer open-source and low-cost technologies. Never require dedicated hardware.
+
+2. Project Vision
+
+Build an intelligent municipal waste collection route optimization platform that helps municipalities collect waste more efficiently.
+
+The system generates optimized collection routes dynamically according to:
+
+Actual road networks (not straight-line distances)
+
+Collection locations and estimated demand
+
+Vehicle capacities and availability
+
+Available working hours / shift duration
+
+Collection priorities
+
+Optional traffic conditions only when a legitimate data source exists
+
+The platform must be entirely software-based.
+
+2.1 Strict Constraint — No Dedicated Hardware
+
+Do NOT require, assume, or design around any of the following:
+
+IoT sensors or smart bins
+
+RFID devices
+
+GPS tracking hardware or vehicle-mounted equipment
+
+Any specialized physical devices
+
+Use only software, existing digital map services, historical or administrator-entered data, optimization algorithms, and optional driver smartphone interactions through a standard web interface.
+
+3. Main Objectives
+
+The system must be able to:
+
+Accept municipal waste collection locations (streets, collection points, community bins, designated pickup areas).
+
+Import locations from CSV, Excel, GeoJSON, or a database.
+
+Display collection points and vehicle routes on an interactive map.
+
+Calculate efficient routes using actual road networks.
+
+Optimize routes for one or multiple garbage collection vehicles.
+
+Respect vehicle capacity, shift duration, depot locations, road restrictions (where data exists), and collection priorities.
+
+Recalculate routes when relevant conditions change (software-triggered).
+
+Compare optimized routes against existing or manually created baseline routes.
+
+Estimate distance, travel time, fuel consumption, operating cost, and carbon emissions.
+
+Provide a practical dashboard for municipal administrators and vehicle operators.
+
+4. Mandatory Technology Decisions (MVP)
+
+After evaluation of current options, the following stack is fixed for the MVP. Do not substitute without strong justification.
+
+4.1 Road-Network Routing
+
+Primary: Self-hosted OSRM (Open Source Routing Machine) running on an OpenStreetMap extract of the demonstration area.
+
+License: BSD-2-Clause. Official Docker images available.
+
+Purpose: Generate distance/duration matrices (/table) and detailed route geometries (/route).
+
+Fallback for tiny prototypes only: openrouteservice free tier (subject to daily quotas).
+
+4.2 Interactive Maps
+
+Leaflet + OpenStreetMap raster tiles.
+
+Reason: Lowest complexity, excellent plugin ecosystem, sufficient for markers + polylines + popups.
+
+4.3 Optimization Engine
+
+Google OR-Tools Routing library (Python bindings).
+
+Primary model: Capacitated Vehicle Routing Problem (CVRP).
+
+Optional extension: VRP with Time Windows (VRPTW) when reliable service-time data exists.
+
+Search strategy: PATH_CHEAPEST_ARC first solution + GUIDED_LOCAL_SEARCH metaheuristic with a configurable time limit.
+
+4.4 Backend & Data
+
+Python 3.11+ with FastAPI.
+
+PostgreSQL 15+ with PostGIS extension.
+
+JWT-based authentication and simple role-based access control.
+
+4.5 Frontend
+
+React (Vite) + Leaflet.
+
+Clean, non-technical administrator experience.
+
+4.6 Deployment
+
+Docker Compose (backend, frontend, PostGIS, OSRM) suitable for local development and single-VM demonstration.
+
+5. Core Route Optimization Engine
+
+This is the most important component. Treat road-network pathfinding and vehicle-routing assignment as two separate problems.
+
+5.1 Inputs the Engine Must Accept
+
+A. Collection Locations
+
+Geographic coordinates (snapped to road network where possible)
+
+Expected collection demand / estimated waste quantity
+
+Collection priority
+
+Service time required at each location
+
+Required vs optional collection status
+
+B. Vehicle Constraints
+
+Number of available vehicles
+
+Capacity of each vehicle
+
+Starting depot and ending destination (normally return-to-depot)
+
+Maximum working hours or shift duration
+
+Vehicle availability status
+
+C. Route Constraints
+
+Actual road-network distances and estimated travel times (from OSRM)
+
+One-way streets and turn restrictions (supported by OSM/OSRM data)
+
+Service time at each collection point
+
+Optional collection time windows
+
+Return-to-depot requirements
+
+Optional disposal facility visits when capacity is reached (advanced)
+
+5.2 Optimization Objectives
+
+Minimize a practical primary objective while respecting hard constraints. Recommended default for MVP:
+
+Primary: Total road-network distance (or total travel time)
+
+Hard constraints: Vehicle capacity, maximum route duration
+
+Soft / secondary: Number of vehicles used, workload balance, priority penalties, unserved-stop penalties
+
+Do not claim that all objectives can be minimized simultaneously. Expose the primary objective and optional penalty weights.
+
+5.3 Algorithms
+
+Road-network shortest paths: OSRM (Dijkstra / Multi-Level Dijkstra / Contraction Hierarchies internally)
+
+High-level assignment and sequencing: Capacitated VRP solved by OR-Tools
+
+Clearly separate the two layers. Never use Euclidean distances for final routes.
+
+5.4 Mathematical Model (CVRP)
+
+Nodes V = {0, 1, …, n} where 0 is the depot. Vehicles K with capacity Q. Demand d_i. Cost c_ij = road-network distance or time from OSRM.
+
+Minimize Σ_k Σ_i Σ_j c_ij · x_ijk
+
+Subject to: each customer visited exactly once, flow conservation, capacity constraints, depot start/end, and subtour elimination (handled by the solver).
+
+5.5 Pseudocode Outline
+
+function optimize_routes(locations, vehicles, depot, config):
+
+    matrix = osrm_table(all_coordinates)          # distance + duration
+
+    manager = RoutingIndexManager(n, n_vehicles, depot_idx)
+
+    routing = RoutingModel(manager)
+
+    register transit callback from matrix
+
+    routing.SetArcCostEvaluatorOfAllVehicles(...)
+
+    add Capacity dimension with vehicle capacities
+
+    optional: add Time dimension and windows
+
+    params = DefaultRoutingSearchParameters()
+
+    params.time_limit = config.time_limit
+
+    solution = routing.SolveWithParameters(params)
+
+    extract routes → call OSRM /route for geometries → compute metrics
+
+    return routes, metrics, unserved_stops
+
+6. Dynamic Route Reoptimization (Software-Only)
+
+Because no live sensors or GPS hardware exist, reoptimization is purely event-driven.
+
+6.1 Supported Triggers (MVP)
+
+New collection location added
+
+Location marked as missed or completed
+
+Road becomes unavailable (administrator-reported incident)
+
+Vehicle becomes unavailable or capacity changes
+
+Estimated demand or priority of one or more stops changes
+
+Administrator manually requests reoptimization
+
+6.2 Process
+
+New information is written to the database.
+
+Affected active route plans are identified.
+
+A new optimization run is created with updated data. Optionally keep already-completed stops fixed and lightly penalize deviation from the previous remaining sequence.
+
+New routes and geometries are stored; the previous plan is retained for comparison and audit.
+
+Web interface refreshes the map and stop lists with a clear “Plan updated” notification.
+
+Never claim live traffic, real-time vehicle positions, or automatic bin-fill measurements unless an actual external data source is integrated and documented.
+
+7. System Architecture Requirements
+
+Produce a modular architecture that can be developed incrementally.
+
+7.1 High-Level Components
+
+Frontend: React + Leaflet dashboard
+
+API: FastAPI (REST + JWT auth)
+
+Optimization Service: OR-Tools wrapper
+
+Matrix Service: OSRM client + optional caching
+
+Database: PostgreSQL + PostGIS
+
+Routing Engine: Self-hosted OSRM container
+
+7.2 Data Flow
+
+Import locations → validate & store → request optimization → build matrix via OSRM → solve CVRP with OR-Tools → store routes + geometries + metrics → return GeoJSON and summary to frontend → render on map.
+
+7.3 Deployment
+
+Docker Compose with services for frontend, backend, database, and OSRM. Suitable for local machines and a single cloud VM demonstration.
+
+8. Data Model Requirements
+
+The database must support at least:
+
+Users and roles
+
+Municipalities / service zones
+
+Depots
+
+Collection locations (geography Point, demand, service time, priority, status)
+
+Vehicles (capacity, max duration, status, depot)
+
+Optimization runs
+
+Route plans (per vehicle) with total metrics and LineString geometry
+
+Ordered route stops
+
+Route metrics (distance, time, estimated fuel, cost, CO₂, unserved count)
+
+Road closures / operational incidents
+
+Audit logs
+
+Store coordinates as geography(Point, 4326). Store route geometry as geography(LineString). Use SI units (meters, seconds, kilograms). Distinguish measured data, administrator-entered data, and model-generated estimates.
+
+9. Data Acquisition and Demo Dataset
+
+Build an initial dataset without any hardware:
+
+OpenStreetMap road network extract for a realistic mid-sized urban/suburban district
+
+80–150 synthetic but realistic collection points (road-snapped)
+
+Realistic demand distribution, service times, and a few high-priority stops
+
+1–2 depots and 3–5 vehicles with defined capacities and shift lengths
+
+Provide example CSV structures. Do not invent real municipal datasets or claim access to unavailable APIs.
+
+10. Baseline Comparison and Evaluation
+
+Always compare against a fair baseline using identical locations, vehicles, capacities, and service requirements.
+
+Recommended baseline: Nearest-neighbor constructive heuristic (or manually defined routes if available)
+
+Metrics: total road-network distance, total travel time, total route duration (including service), estimated fuel, estimated operating cost, estimated CO₂, vehicles used, workload balance, unserved stops, solver runtime
+
+Fuel and emissions must be clearly labeled as estimates. Document the conversion factors used. Never present them as measured real-world savings.
+
+11. User Interface Requirements
+
+Design for municipal administrators and operators who may not be technical. Required screens:
+
+Login and role management
+
+Municipal operations dashboard
+
+Interactive collection map
+
+Collection point import and management
+
+Vehicle and depot management
+
+Route optimization configuration
+
+Optimized route visualization and stop sequence
+
+Multi-vehicle route comparison
+
+Route recalculation and incident management
+
+Baseline-versus-optimized analytics
+
+Historical optimization runs and reports
+
+12. API Design Requirements
+
+Provide clean REST endpoints for:
+
+Importing and validating collection points
+
+Managing vehicles and depots
+
+Creating an optimization run
+
+Retrieving route plans, geometries, and stop sequences
+
+Updating collection priorities
+
+Reporting road closures or operational incidents
+
+Triggering route reoptimization
+
+Comparing route plans
+
+Retrieving analytics and historical results
+
+Include authentication, authorization, input validation, clear error handling, and protection against duplicate optimization requests.
+
+13. Failure Cases and Practical Limitations
+
+The system must handle and clearly communicate:
+
+Missing or inaccurate coordinates
+
+Collection points inaccessible via mapped roads
+
+Incomplete road-network data
+
+Unavailable routing service
+
+Infeasible capacity or time constraints
+
+Optimization timeouts
+
+Unexpected demand changes
+
+Incorrect fuel-consumption assumptions
+
+Never silently claim a successful optimization when returned routes violate mandatory constraints. Always distinguish estimated values from measured values.
+
+14. Security, Privacy, and Responsible Use
+
+Authentication and role-based access control
+
+Secure storage of credentials and secrets
+
+Strict input validation and upload restrictions
+
+Protection against malicious file uploads
+
+Data backups and audit trails
+
+Minimal collection of personal data
+
+Licensing compliance for map data and routing services (OSM attribution, OSRM license, etc.)
+
+15. Development Roadmap (Phased)
+
+Problem definition and data model
+
+Dataset preparation and map integration
+
+Road-network distance and travel-time matrix generation
+
+Single-vehicle route optimization
+
+Multi-vehicle and capacity-constrained optimization
+
+Interactive route visualization
+
+Dynamic route recalculation
+
+Cost, fuel, and emissions estimates
+
+Evaluation, testing, and benchmarking
+
+Deployment and final demonstration
+
+Identify the smallest functional MVP (typically phases 1–6) and deliberately postpone non-essential features.
+
+16. Testing Strategy Requirements
+
+Cover unit, integration, system, and performance testing. Mandatory test cases include:
+
+Empty datasets and single collection point
+
+Multiple vehicles and capacity overflow
+
+Missing coordinates and disconnected road segments
+
+Depot return requirements
+
+Time-window violations (if enabled)
+
+Road closure events and reoptimization after demand change
+
+Reproducibility and baseline comparison
+
+Verify that every returned route follows the road network and that all mandatory collection points are either assigned or explicitly reported as unserved.
+
+17. Quality and Honesty Requirements
+
+Use clear, technically precise language.
+
+Make explicit engineering decisions; do not list endless alternatives.
+
+Explain the reasoning behind major decisions.
+
+Include diagrams, tables, formulas, pseudocode, and concrete examples where useful.
+
+Distinguish confirmed capabilities from assumptions and future functionality.
+
+Cite authoritative documentation for technology and licensing claims.
+
+Never fabricate API capabilities, datasets, benchmark results, or real-world impact figures.
+
+Keep the architecture achievable for a student project.
+
+Prefer low-cost, maintainable solutions.
+
+Avoid unnecessary microservices or overly complex infrastructure.
+
+Do not require specialized hardware.
+
+Do not make live GPS tracking or live traffic a mandatory dependency.
+
+Prioritize route optimization quality, feasibility, transparency, and measurable outcomes.
+
+18. Questions That Must Be Answered Explicitly
+
+Any complete response or blueprint produced under this prompt must answer:
+
+What exactly should be built first?
+
+Which algorithm and optimization library should be used, and why?
+
+Which mapping and road-routing solution should be used, and why?
+
+What data is needed to start?
+
+How will dynamic reoptimization work without hardware?
+
+How will optimized routes be proven better than a baseline?
+
+What features should be deliberately postponed?
+
+What is the most technically challenging part of this project?
+
+What are the biggest risks to successful implementation?
+
+What should the first working demonstration look like?
+
+19. Expected Output
+
+Produce a coherent, implementation-ready Master Project Blueprint (or equivalent technical specification) that a small team can begin coding from immediately. Prioritize a working, testable software system over unnecessary complexity or marketing language.
+
+The system must remain software-only at every stage.
+
+— End of Complete Master Prompt —

@@ -21,7 +21,7 @@ class DynamicReoptimizer:
     - Vehicle availability / capacity changes
     - Priority adjustments
     """
-
+                 
     async def reoptimize_active_plan(
         self,
         db: AsyncSession,

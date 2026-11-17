@@ -26,36 +26,45 @@ An AI-powered, software-only platform for optimizing municipal solid waste colle
      - **Operational Cost Savings ($)**
      - **Workload Balance (Standard Deviation)**
 
-4. **Software-Driven Dynamic Re-Optimization**
+4. **Real-Time Traffic Engine & Load-Dependent Fuel Minimization**
+   - **Dynamic Time-of-Day Traffic Profile:** Evaluates actual time-of-day traffic congestion (Morning Peak, Mid-Day Flow, Evening Rush, Night Off-Peak) across municipal corridors and bottleneck hotspots (e.g., Swargate, Sancheti Circle, Laxmi Road).
+   - **Scientific Fuel Consumption Model (EEA MEET Standard):** Computes diesel fuel burned across three realistic components:
+     1. *Cruising Fuel:* Scales dynamically from 0.36 L/km empty up to 0.54 L/km under full 1,500 kg compaction load.
+     2. *Traffic Congestion Delay Idling:* Accounts for refuse truck engine idle consumption (~2.40 L/hr) during urban traffic bottlenecks.
+     3. *Compactor Hydraulic Cycle Fuel:* Refuse packer Power Take-Off (~0.035 L per collection bin).
+   - **Dynamic Fleet Sizing (Vehicle Optimization):** Fixed vehicle dispatch costs allow Google OR-Tools to determine the *exact optimal number of trucks to deploy*, keeping surplus trucks in the depot to maximize efficiency and cut operational costs.
+
+5. **Software-Driven Dynamic Re-Optimization**
    - Dynamically re-solves routes when real-world operational events occur:
+     - 🚦 **Traffic Bottleneck / Jam:** Re-routes vehicles around congested intersections.
      - 🚧 **Road Closure / Incident:** Automatically routes vehicles around blocked streets.
      - 🚨 **Emergency Overflow Pickup:** Dynamically inserts urgent collection stops into active shifts.
      - ⚠️ **Missed Collection Point:** Reallocates skipped stops to the next available vehicle.
+
+6. **100% Free Open-Source Ecosystem & Exports**
+   - **Zero API Fees:** Powered by Google OR-Tools (Apache 2.0), OpenStreetMap (ODbL), and OSRM (BSD-2).
+   - **Live City Ingestion via OpenStreetMap Overpass API:** Ingest real-world bins, recycling points, and road networks for *any* global city on demand.
+   - **GIS Standards Export:** One-click export to standard **GeoJSON** for direct import into QGIS/ArcGIS, plus a downloadable **Driver Collection Manifest (CSV)**.
+   - **Single-Command Docker Deployment:** Complete `docker-compose.yml` orchestrating FastAPI, PostGIS, and local self-hosted OSRM routing.
 
 ---
 
 ## 🚀 Quick Start (Running the Demo)
 
-### 1. Prerequisites
-- Python 3.11+
-- Web browser (Chrome, Edge, Firefox)
-
-### 2. Install Dependencies
+### Option A: Local Python Run
 ```bash
+# 1. Install dependencies
 pip install -r backend/requirements.txt
-```
 
-### 3. Start the Platform
-```bash
+# 2. Start server
 python main.py
 ```
-Or with Uvicorn:
-```bash
-uvicorn backend.main:app --reload --port 8000
-```
+Open **[http://127.0.0.1:8000](http://127.0.0.1:8000)** in your browser!
 
-### 4. Open in Browser
-Open **[http://127.0.0.1:8000](http://127.0.0.1:8000)** to view the live executive dashboard!
+### Option B: 100% Self-Hosted Docker Compose (With PostGIS & Local OSRM)
+```bash
+docker-compose up --build
+```
 
 ---
 

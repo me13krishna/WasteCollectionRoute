@@ -1,26 +1,26 @@
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-from sqlalchemy.orm import declarative_base
-from backend.config import settings
+import os
+from sqlalchemy import create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
 
-engine = create_async_engine(
-    settings.DATABASE_URL,
+# Universal SQLite & PostgreSQL database setup (100% compatible with Python 3.11 - 3.14)
+SYNC_DB_URL = os.getenv("DATABASE_URL", "sqlite:///./waste_route.db").replace("+aiosqlite", "").replace("+asyncpg", "")
+
+engine = create_engine(
+    SYNC_DB_URL,
     echo=False,
-    future=True
+    connect_args={"check_same_thread": False} if "sqlite" in SYNC_DB_URL else {}
 )
 
-AsyncSessionLocal = async_sessionmaker(
-    bind=engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-    autocommit=False,
-    autoflush=False
-)
-
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-async def get_db():
-    async with AsyncSessionLocal() as session:
-        try:
-            yield session
-        finally:
-            await session.close()
+def init_db():
+    from backend.models import db_models  # ensure models are registered
+    Base.metadata.create_all(bind=engine)
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()

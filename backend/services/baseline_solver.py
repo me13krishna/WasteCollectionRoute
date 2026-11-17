@@ -1,6 +1,7 @@
 import math
 from typing import List, Dict, Any, Tuple
 from backend.config import settings
+from backend.services.vrp_solver import compute_route_fuel
 
 class BaselineNearestNeighborSolver:
     """
@@ -132,22 +133,25 @@ class BaselineNearestNeighborSolver:
                 total_travel_time_s += (curr_time - (len(route_stop_indices) - 2) * 90) # approx travel component
                 vehicle_distances.append(route_dist / 1000.0)
 
+                r_fuel = compute_route_fuel(stop_details, distance_matrix, duration_matrix, v_cap)
                 routes.append({
                     "vehicle_id": v_id,
                     "vehicle_name": v.get("name"),
+                    "vehicle_capacity_kg": v_cap,
                     "total_distance_m": round(route_dist, 1),
                     "total_duration_sec": int(curr_time),
                     "total_demand_kg": round(curr_load, 1),
                     "stops": stop_details,
                     "stop_indices": route_stop_indices,
+                    "fuel": r_fuel,
                 })
 
         # Calculate metrics
         total_dist_km = total_distance_m / 1000.0
-        est_fuel_liters = total_dist_km * settings.FUEL_L_PER_KM
-        est_co2_kg = est_fuel_liters * settings.CO2_KG_PER_L
+        total_fuel_liters = sum(r["fuel"]["total_fuel_liters"] for r in routes) if routes else (total_dist_km * settings.FUEL_L_PER_KM)
+        est_co2_kg = total_fuel_liters * settings.CO2_KG_PER_L
         driver_hours = (total_travel_time_s + total_service_time_s) / 3600.0
-        est_total_cost = (est_fuel_liters * settings.FUEL_COST_PER_L) + (driver_hours * settings.DRIVER_HOURLY_RATE)
+        est_total_cost = (total_fuel_liters * settings.FUEL_COST_PER_L) + (driver_hours * settings.DRIVER_HOURLY_RATE)
 
         # Workload balance standard deviation
         if vehicle_distances:
@@ -164,7 +168,7 @@ class BaselineNearestNeighborSolver:
                 "total_distance_km": round(total_dist_km, 2),
                 "total_travel_time_sec": int(total_travel_time_s),
                 "total_service_time_sec": int(total_service_time_s),
-                "est_fuel_liters": round(est_fuel_liters, 2),
+                "est_fuel_liters": round(total_fuel_liters, 2),
                 "est_co2_kg": round(est_co2_kg, 2),
                 "est_total_cost": round(est_total_cost, 2),
                 "vehicles_used": len(routes),

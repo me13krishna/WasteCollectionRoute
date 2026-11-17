@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  # --- 1. EcoRoute AI Backend & Executive Web Dashboard ---
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ecoroute_backend
+    ports:
+      - "8000:8000"
+    environment:
+      - PROJECT_NAME=EcoRoute AI - Municipal Waste Collection
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/ecoroute
+      - OSRM_BASE_URL=http://osrm:5000
+      - FUEL_L_PER_KM=0.45
+      - CO2_KG_PER_L=2.68
+      - FUEL_COST_PER_L=1.35
+      - DRIVER_HOURLY_RATE=22.50
+    volumes:
+      - ./backend/data:/app/backend/data
+    depends_on:
+      - db
+      - osrm
+    restart: unless-stopped
+
+  # --- 2. 100% Free Self-Hosted Road Network Routing Engine (OSRM) ---
+  osrm:
+    image: ghcr.io/project-osrm/osrm-backend:latest
+    container_name: ecoroute_osrm
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./osrm-data:/data
+    # Command to run OSRM routed server on prepared map extract
+    command: osrm-routed --algorithm mld /data/district.osrm
+    restart: unless-stopped
+
+  # --- 3. Open-Source Spatial Database (PostgreSQL 16 + PostGIS) ---
+  db:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: ecoroute_postgis
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=ecoroute
+    volumes:
+      - postgis_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  postgis_data:

@@ -5,24 +5,38 @@ import time
 import json
 import logging
 from typing import List, Dict, Any, Optional
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, Response
 from pydantic import BaseModel
 
 from backend.config import settings
+from backend.database import init_db
 from backend.services.routing_matrix import routing_service
 from backend.services.baseline_solver import baseline_solver
 from backend.services.vrp_solver import vrp_solver
+from backend.services.osm_extractor import osm_extractor
+from backend.services.traffic_service import traffic_engine, PUNE_TRAFFIC_HOTSPOTS
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("EcoRouteAI")
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        init_db()
+        logger.info("Database initialized successfully (SQLite / PostGIS models synced).")
+    except Exception as e:
+        logger.warning(f"Database initialization warning: {e}")
+    yield
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     description="Software-only AI-Powered Municipal Waste Collection Route Optimization Platform",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # CORS
@@ -39,23 +53,24 @@ SAMPLE_CSV_PATH = os.path.join(os.path.dirname(__file__), "data", "sample_datase
 
 DEFAULT_DEPOT = {
     "id": 0,
-    "name": "Central Municipal Solid Waste Depot",
-    "lat": 12.9716,
-    "lon": 77.5946,
-    "address": "Depot #1, Cubbon Road, Central Ward"
+    "name": "PMC Central Solid Waste Transfer Depot",
+    "lat": 18.5284,
+    "lon": 73.8480,
+    "address": "Ghole Road, Shivajinagar, Pune Municipal Corporation (PMC)"
 }
 
 DEFAULT_VEHICLES = [
-    {"id": 1, "name": "Waste Compactor Truck #1", "capacity_kg": 1500.0, "max_duration_sec": 28800, "status": "available", "color": "#10b981"},
-    {"id": 2, "name": "Waste Compactor Truck #2", "capacity_kg": 1400.0, "max_duration_sec": 28800, "status": "available", "color": "#06b6d4"},
-    {"id": 3, "name": "Refuse Collection Truck #3", "capacity_kg": 1600.0, "max_duration_sec": 28800, "status": "available", "color": "#8b5cf6"},
-    {"id": 4, "name": "Electric Refuse Truck #4", "capacity_kg": 1300.0, "max_duration_sec": 28800, "status": "available", "color": "#f59e0b"}
+    {"id": 1, "name": "PMC Compactor Truck #1 (West Zone)", "capacity_kg": 1500.0, "max_duration_sec": 28800, "status": "available", "color": "#00E676"},
+    {"id": 2, "name": "PMC Refuse Truck #2 (East Zone)", "capacity_kg": 1400.0, "max_duration_sec": 28800, "status": "available", "color": "#00E5FF"},
+    {"id": 3, "name": "PMC Compactor Truck #3 (Central Peths)", "capacity_kg": 1600.0, "max_duration_sec": 28800, "status": "available", "color": "#D500F9"},
+    {"id": 4, "name": "PMC Swachh Truck #4 (South Zone)", "capacity_kg": 1300.0, "max_duration_sec": 28800, "status": "available", "color": "#FF9100"}
 ]
 
 current_locations: List[Dict[str, Any]] = []
 current_depot = dict(DEFAULT_DEPOT)
 current_vehicles = list(DEFAULT_VEHICLES)
 current_incidents: List[Dict[str, Any]] = []
+last_solution: Optional[Dict[str, Any]] = None
 
 def load_initial_dataset():
     global current_locations
@@ -82,16 +97,25 @@ load_initial_dataset()
 # Schemas
 class OptimizeRequest(BaseModel):
     selected_stop_count: Optional[int] = 50  # for demo speed / responsiveness
-    objective: Optional[str] = "distance"
+    objective: Optional[str] = "fuel"  # "fuel", "traffic_duration", "distance"
     time_limit_sec: Optional[int] = 10
     active_vehicles_count: Optional[int] = 4
+    fleet_mode: Optional[str] = "auto_minimize_vehicles"  # "auto_minimize_vehicles", "fixed_fleet"
+    traffic_enabled: Optional[bool] = True
 
 class IncidentRequest(BaseModel):
-    incident_type: str  # "road_closure", "missed_stop", "urgent_pickup"
+    incident_type: str  # "road_closure", "traffic_jam", "missed_stop", "urgent_pickup"
     description: str
     lat: Optional[float] = None
     lon: Optional[float] = None
     stop_id: Optional[int] = None
+
+class OsmExtractRequest(BaseModel):
+    city: Optional[str] = "Pune"
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    radius_meters: Optional[int] = 5000
+    limit: Optional[int] = 60
 
 # --- API Endpoints ---
 
@@ -105,11 +129,28 @@ async def get_dataset():
         "total_stops": len(current_locations)
     }
 
+@app.get("/api/v1/traffic/status")
+async def get_traffic_status():
+    """
+    Returns real-time urban traffic congestion conditions and active bottleneck hotspots.
+    """
+    base_factor, period_name, period_desc = traffic_engine.get_time_of_day_congestion_factor()
+    return {
+        "success": True,
+        "current_time": time.strftime("%H:%M:%S"),
+        "period_name": period_name,
+        "period_desc": period_desc,
+        "base_congestion_factor": base_factor,
+        "hotspots": PUNE_TRAFFIC_HOTSPOTS,
+        "active_incidents_count": len([i for i in current_incidents if i.get("active")])
+    }
+
 @app.post("/api/v1/optimize")
 async def run_optimization(req: OptimizeRequest):
     """
     Runs Google OR-Tools CVRP solver with Guided Local Search.
-    Uses OSRM road-network distance matrix and generates road geometries.
+    Enriched with real-time dynamic traffic congestion, fleet size minimization,
+    and load-dependent fuel & emissions optimization.
     """
     n_stops = min(req.selected_stop_count or 50, len(current_locations))
     active_stops = current_locations[:n_stops]
@@ -119,35 +160,35 @@ async def run_optimization(req: OptimizeRequest):
     all_nodes = [current_depot] + active_stops
     coords = [(node["lat"], node["lon"]) for node in all_nodes]
 
-    # 1. Distance & Duration Matrix via OSRM (or road-network topology fallback)
-    distances, durations = await routing_service.get_distance_and_duration_matrix(coords)
+    # 1. Base Distance & Duration Matrix via OSRM (or road-network topology fallback)
+    base_distances, base_durations = await routing_service.get_distance_and_duration_matrix(coords)
 
-    # Apply road closures if active
-    for inc in current_incidents:
-        if inc.get("active") and inc.get("incident_type") == "road_closure" and inc.get("lat"):
-            inc_lat = inc["lat"]
-            inc_lon = inc["lon"]
-            for i in range(len(coords)):
-                for j in range(len(coords)):
-                    if i != j:
-                        mid_lat = (coords[i][0] + coords[j][0]) / 2.0
-                        mid_lon = (coords[i][1] + coords[j][1]) / 2.0
-                        if abs(mid_lat - inc_lat) < 0.008 and abs(mid_lon - inc_lon) < 0.008:
-                            distances[i][j] *= 8.0
-                            durations[i][j] *= 8.0
+    # 2. Enrich with Real-Time Traffic & Incident Delays
+    is_traffic = req.traffic_enabled if req.traffic_enabled is not None else True
+    traffic_data = traffic_engine.apply_traffic_to_matrices(
+        coords,
+        base_distances,
+        base_durations,
+        current_incidents,
+        traffic_enabled=is_traffic
+    )
+    traffic_durations = traffic_data["traffic_duration_matrix"]
+    traffic_fuel_matrix = traffic_data["traffic_fuel_matrix"]
 
-    # 2. Solve CVRP with Google OR-Tools (Guided Local Search)
+    # 3. Solve CVRP with Google OR-Tools (Guided Local Search)
     solution = vrp_solver.solve_cvrp(
         depot_index=0,
         locations=all_nodes,
         vehicles=fleet,
-        distance_matrix=distances,
-        duration_matrix=durations,
+        distance_matrix=base_distances,
+        duration_matrix=traffic_durations,
+        fuel_matrix=traffic_fuel_matrix,
         time_limit_sec=req.time_limit_sec or 10,
-        objective=req.objective or "distance"
+        objective=req.objective or "fuel",
+        optimize_fleet_size=(req.fleet_mode == "auto_minimize_vehicles")
     )
 
-    # 3. Attach full road geometry to each vehicle route
+    # 4. Attach full road geometry to each vehicle route
     for route in solution["routes"]:
         pts = [(s["lat"], s["lon"]) for s in route["stops"]]
         geometry = await routing_service.get_route_geometry(pts)
@@ -161,8 +202,8 @@ async def run_optimization(req: OptimizeRequest):
         depot_index=0,
         locations=all_nodes,
         vehicles=fleet,
-        distance_matrix=distances,
-        duration_matrix=durations
+        distance_matrix=base_distances,
+        duration_matrix=traffic_durations
     )
 
     # Compute comparison deltas
@@ -178,6 +219,7 @@ async def run_optimization(req: OptimizeRequest):
     fuel_diff, fuel_pct = calc_delta(base_m["est_fuel_liters"], opt_m["est_fuel_liters"])
     co2_diff, co2_pct = calc_delta(base_m["est_co2_kg"], opt_m["est_co2_kg"])
     cost_diff, cost_pct = calc_delta(base_m["est_total_cost"], opt_m["est_total_cost"])
+    vehicles_saved = max(0, len(fleet) - opt_m["vehicles_used"])
 
     comparison = {
         "baseline": base_m,
@@ -190,8 +232,20 @@ async def run_optimization(req: OptimizeRequest):
             "co2_kg": co2_diff,
             "co2_percent": co2_pct,
             "cost_dollars": cost_diff,
-            "cost_percent": cost_pct
+            "cost_percent": cost_pct,
+            "vehicles_saved": vehicles_saved,
+            "vehicles_dispatched": opt_m["vehicles_used"],
+            "fleet_available": len(fleet)
         }
+    }
+
+    global last_solution
+    last_solution = {
+        "solution": solution,
+        "comparison": comparison,
+        "fleet": fleet,
+        "stops_count": len(active_stops),
+        "depot": current_depot
     }
 
     return {
@@ -199,6 +253,8 @@ async def run_optimization(req: OptimizeRequest):
         "solution": solution,
         "comparison": comparison,
         "fleet": fleet,
+        "traffic": traffic_data["summary"],
+        "traffic_overlay": traffic_data["overlay_segments"],
         "stops_count": len(active_stops)
     }
 
@@ -212,8 +268,8 @@ async def report_incident(inc: IncidentRequest):
         "id": len(current_incidents) + 1,
         "incident_type": inc.incident_type,
         "description": inc.description,
-        "lat": inc.lat or 12.9750,
-        "lon": inc.lon or 77.6010,
+        "lat": inc.lat or current_depot["lat"],
+        "lon": inc.lon or current_depot["lon"],
         "stop_id": inc.stop_id,
         "active": True,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
@@ -243,6 +299,202 @@ async def report_incident(inc: IncidentRequest):
         current_locations.insert(0, new_stop)
 
     return {"success": True, "incident": incident_obj, "total_incidents": len(current_incidents)}
+
+@app.post("/api/v1/osm/extract")
+async def extract_osm_points(req: OsmExtractRequest):
+    """
+    Extracts real waste disposal, recycling, or market collection points
+    for any global city using 100% free OpenStreetMap Overpass API (no API keys required).
+    """
+    global current_locations, current_depot
+    center_lat = req.lat
+    center_lon = req.lon
+    city_name = req.city or "Pune"
+
+    if center_lat is None or center_lon is None:
+        geocoded = await osm_extractor.geocode_city(city_name)
+        if geocoded:
+            center_lat = geocoded["lat"]
+            center_lon = geocoded["lon"]
+            city_name = geocoded["name"].split(",")[0]
+        else:
+            center_lat = 18.5284
+            center_lon = 73.8480
+
+    points = await osm_extractor.fetch_city_collection_points(
+        lat=center_lat,
+        lon=center_lon,
+        radius_meters=req.radius_meters or 5000,
+        limit=req.limit or 60
+    )
+
+    if not points:
+        raise HTTPException(status_code=502, detail="Could not retrieve points from OpenStreetMap Overpass.")
+
+    current_locations = points
+    current_depot = {
+        "id": 0,
+        "name": f"{city_name} Municipal Central Depot",
+        "lat": round(center_lat, 6),
+        "lon": round(center_lon, 6),
+        "address": f"Central Solid Waste Operations Center, {city_name}"
+    }
+
+    return {
+        "success": True,
+        "city": city_name,
+        "depot": current_depot,
+        "total_stops": len(current_locations),
+        "locations": current_locations
+    }
+
+@app.post("/api/v1/upload-csv")
+async def upload_csv_dataset(file: UploadFile = File(...)):
+    """
+    Uploads custom municipal collection stops CSV (name, lat, lon, demand_kg, etc.).
+    """
+    global current_locations
+    contents = await file.read()
+    decoded = contents.decode("utf-8")
+    reader = csv.DictReader(io.StringIO(decoded))
+    
+    new_locations = []
+    idx = 1
+    for row in reader:
+        try:
+            new_locations.append({
+                "id": idx,
+                "name": row.get("name", f"Collection Point #{idx}"),
+                "lat": float(row["lat"]),
+                "lon": float(row["lon"]),
+                "demand_kg": float(row.get("demand_kg", 60.0)),
+                "service_time_sec": int(row.get("service_time_sec", 90)),
+                "priority": int(row.get("priority", 1)),
+                "required": row.get("required", "true").lower() == "true",
+                "status": "pending"
+            })
+            idx += 1
+        except Exception as e:
+            logger.warning(f"Skipping malformed row {row}: {e}")
+            continue
+
+    if not new_locations:
+        raise HTTPException(status_code=400, detail="No valid collection points found in CSV.")
+
+    current_locations = new_locations
+    return {"success": True, "total_imported": len(current_locations)}
+
+@app.get("/api/v1/export/geojson")
+async def export_geojson():
+    """
+    Exports latest optimized multi-vehicle routes & collection stops as standard GeoJSON
+    for direct integration into QGIS, ArcGIS, or Leaflet.
+    """
+    if not last_solution or not last_solution.get("solution"):
+        raise HTTPException(status_code=400, detail="No optimization solution available. Run optimization first.")
+
+    features = []
+    sol = last_solution["solution"]
+
+    # 1. Routes (LineStrings)
+    for r in sol.get("routes", []):
+        if r.get("geometry"):
+            coords = [[pt[1], pt[0]] for pt in r["geometry"]]  # GeoJSON expects [lon, lat]
+            features.append({
+                "type": "Feature",
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": coords
+                },
+                "properties": {
+                    "vehicle_id": r["vehicle_id"],
+                    "vehicle_name": r["vehicle_name"],
+                    "total_distance_km": round(r["total_distance_m"] / 1000.0, 2),
+                    "total_duration_min": round(r["total_duration_sec"] / 60.0, 1),
+                    "total_demand_kg": r["total_demand_kg"],
+                    "stops_count": len(r["stops"])
+                }
+            })
+
+    # 2. Stops (Points)
+    for r in sol.get("routes", []):
+        for s_idx, s in enumerate(r.get("stops", [])):
+            if s.get("lat") and s.get("lon"):
+                features.append({
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [s["lon"], s["lat"]]
+                    },
+                    "properties": {
+                        "vehicle_name": r["vehicle_name"],
+                        "stop_sequence": s_idx,
+                        "location_name": s.get("location_name"),
+                        "collected_kg": s.get("collected_kg", 0.0),
+                        "arrival_sec": s.get("arrival_sec", 0),
+                        "is_depot": s.get("is_depot", False)
+                    }
+                })
+
+    geojson_data = {
+        "type": "FeatureCollection",
+        "metadata": {
+            "platform": "EcoRoute AI",
+            "algorithm": sol.get("algorithm"),
+            "exported_at": time.strftime("%Y-%m-%d %H:%M:%S")
+        },
+        "features": features
+    }
+
+    return Response(
+        content=json.dumps(geojson_data, indent=2),
+        media_type="application/geo+json",
+        headers={"Content-Disposition": "attachment; filename=ecoroute_optimized_plan.geojson"}
+    )
+
+@app.get("/api/v1/export/manifest")
+async def export_driver_manifest():
+    """
+    Exports a printable/downloadable CSV Driver Manifest for municipal truck operators.
+    """
+    if not last_solution or not last_solution.get("solution"):
+        raise HTTPException(status_code=400, detail="No optimization solution available. Run optimization first.")
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "Vehicle ID", "Vehicle Name", "Sequence Order", "Stop Name",
+        "Latitude", "Longitude", "Demand (kg)", "Cumulative Load (kg)",
+        "Arrival Time (HH:MM:SS)", "Service Duration (sec)"
+    ])
+
+    sol = last_solution["solution"]
+    for r in sol.get("routes", []):
+        for s_idx, s in enumerate(r.get("stops", [])):
+            arr_s = s.get("arrival_sec", 0)
+            hrs = arr_s // 3600
+            mins = (arr_s % 3600) // 60
+            secs = arr_s % 60
+            time_str = f"{hrs:02d}:{mins:02d}:{secs:02d}"
+
+            writer.writerow([
+                r["vehicle_id"],
+                r["vehicle_name"],
+                s_idx,
+                s.get("location_name", "Stop"),
+                s.get("lat"),
+                s.get("lon"),
+                s.get("collected_kg", 0.0),
+                s.get("cumulative_kg", 0.0),
+                time_str,
+                s.get("departure_sec", 0) - arr_s
+            ])
+
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=driver_collection_manifest.csv"}
+    )
 
 @app.post("/api/v1/reset-dataset")
 async def reset_data():

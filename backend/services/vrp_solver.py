@@ -16,6 +16,49 @@ try:
 except ImportError:
     logger.warning("Google OR-Tools not yet found in current environment. Using high-performance Clarke-Wright + Local Search CVRP engine.")
 
+def compute_route_fuel(
+    stops: List[Dict[str, Any]],
+    distance_matrix: List[List[float]],
+    duration_matrix: List[List[float]],
+    vehicle_capacity_kg: float
+) -> Dict[str, float]:
+    """
+    Computes load-dependent and traffic-congestion-aware diesel fuel consumption
+    according to the European Environmental Agency (EEA) MEET Refuse Truck Model.
+    """
+    cruising_fuel = 0.0
+    idling_delay_fuel = 0.0
+
+    for i in range(len(stops) - 1):
+        u = stops[i]["node_idx"]
+        v = stops[i+1]["node_idx"]
+        dist_km = distance_matrix[u][v] / 1000.0
+        dur_s = duration_matrix[u][v]
+        curr_load = stops[i].get("cumulative_kg", 0.0)
+        load_ratio = min(1.0, max(0.0, curr_load / max(1.0, vehicle_capacity_kg)))
+
+        # 1. Load-dependent consumption: 0.36 L/km empty up to 0.54 L/km fully loaded
+        rate_l_per_km = 0.36 + (0.18 * load_ratio)
+        cruising_fuel += dist_km * rate_l_per_km
+
+        # 2. Traffic congestion delay idling:
+        # Free flow urban truck speed ~ 32 km/h (8.88 m/s). Any duration above free-flow is traffic delay
+        free_flow_s = (dist_km / 32.0) * 3600.0 if dist_km > 0 else 0.0
+        delay_hrs = max(0.0, (dur_s - free_flow_s) / 3600.0)
+        idling_delay_fuel += delay_hrs * 2.40  # Refuse truck burns ~2.4 L/hr idling
+
+    # 3. Hydraulic packer compaction PTO fuel: ~0.035 Liters per collection stop
+    actual_collection_stops = max(0, len(stops) - 2)
+    pto_compaction_fuel = actual_collection_stops * 0.035
+
+    total_fuel = cruising_fuel + idling_delay_fuel + pto_compaction_fuel
+    return {
+        "cruising_fuel_liters": round(cruising_fuel, 2),
+        "traffic_idling_fuel_liters": round(idling_delay_fuel, 2),
+        "compactor_pto_fuel_liters": round(pto_compaction_fuel, 2),
+        "total_fuel_liters": round(total_fuel, 2)
+    }
+
 class VrpSolverEngine:
     """
     Capacitated Vehicle Routing Problem (CVRP) optimization engine.
@@ -30,8 +73,10 @@ class VrpSolverEngine:
         vehicles: List[Dict[str, Any]],
         distance_matrix: List[List[float]],
         duration_matrix: List[List[float]],
-        time_limit_sec: int = 30,
-        objective: str = "distance"
+        fuel_matrix: Optional[List[List[float]]] = None,
+        time_limit_sec: int = 10,
+        objective: str = "fuel",
+        optimize_fleet_size: bool = True
     ) -> Dict[str, Any]:
         start_time = time.time()
         
@@ -53,8 +98,10 @@ class VrpSolverEngine:
                     vehicles=vehicles,
                     distance_matrix=distance_matrix,
                     duration_matrix=duration_matrix,
+                    fuel_matrix=fuel_matrix,
                     time_limit_sec=time_limit_sec,
                     objective=objective,
+                    optimize_fleet_size=optimize_fleet_size,
                     start_time=start_time
                 )
             except Exception as e:
@@ -76,8 +123,10 @@ class VrpSolverEngine:
         vehicles: List[Dict[str, Any]],
         distance_matrix: List[List[float]],
         duration_matrix: List[List[float]],
+        fuel_matrix: Optional[List[List[float]]],
         time_limit_sec: int,
         objective: str,
+        optimize_fleet_size: bool,
         start_time: float
     ) -> Dict[str, Any]:
         num_nodes = len(locations)
@@ -101,7 +150,16 @@ class VrpSolverEngine:
         ]
 
         # 1. Cost Evaluator
-        if objective == "duration":
+        if objective == "fuel" and fuel_matrix:
+            # Scale liters * 1000 to milliliters integer cost
+            int_fuel_matrix = [
+                [int(f * 1000.0) for f in row] for row in fuel_matrix
+            ]
+            def transit_callback(from_index, to_index):
+                from_node = manager.IndexToNode(from_index)
+                to_node = manager.IndexToNode(to_index)
+                return int_fuel_matrix[from_node][to_node]
+        elif objective in ["duration", "traffic_duration"]:
             def transit_callback(from_index, to_index):
                 from_node = manager.IndexToNode(from_index)
                 to_node = manager.IndexToNode(to_index)
@@ -115,7 +173,15 @@ class VrpSolverEngine:
         transit_callback_index = routing.RegisterTransitCallback(transit_callback)
         routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
 
-        # 2. Capacity Constraint Dimension
+        # 2. Dynamic Fleet Sizing: Minimize number of vehicles used
+        if optimize_fleet_size:
+            # Fixed vehicle dispatch cost equivalent to vehicle setup & driver shift overhead
+            # In fuel mode: 35,000 mL = 35 L diesel equivalent overhead
+            # In distance mode: 30,000 meters equivalent overhead
+            fixed_cost = 35000 if (objective == "fuel" and fuel_matrix) else 30000
+            routing.SetFixedCostOfAllVehicles(fixed_cost)
+
+        # 3. Capacity Constraint Dimension
         demands = [int(float(loc.get("demand_kg", 0.0))) for loc in locations]
         vehicle_capacities = [int(float(v.get("capacity_kg", 1500.0))) for v in vehicles]
 
@@ -132,7 +198,7 @@ class VrpSolverEngine:
             "Capacity"
         )
 
-        # 3. Time / Shift Duration Dimension (optional constraint)
+        # 4. Time / Shift Duration Dimension (optional constraint)
         def time_callback(from_index, to_index):
             from_node = manager.IndexToNode(from_index)
             to_node = manager.IndexToNode(to_index)
@@ -150,7 +216,21 @@ class VrpSolverEngine:
             "Time"
         )
 
-        # 4. Search Parameters as specified in Blueprint Section 4.3 & 5.5:
+        # 4. Disjunctions & Penalty-Weighted Drop Handling
+        # Allows OR-Tools to gracefully handle capacity/time constraints without failing.
+        # High priority collection points have higher drop penalties:
+        # Priority 1: 50,000 (standard penalty)
+        # Priority 2: 150,000
+        # Priority 3: 350,000
+        # Priority 4: 1,000,000 (urgent - strongly penalized if skipped)
+        for node in range(num_nodes):
+            if node != depot_index:
+                p = int(locations[node].get("priority", 1))
+                penalty_weights = {1: 50000, 2: 150000, 3: 350000, 4: 1000000}
+                penalty = penalty_weights.get(p, 50000)
+                routing.AddDisjunction([manager.NodeToIndex(node)], penalty)
+
+        # 5. Search Parameters as specified in Blueprint Section 4.3 & 5.5:
         # PATH_CHEAPEST_ARC + GUIDED_LOCAL_SEARCH
         search_parameters = pywrapcp.DefaultRoutingSearchParameters()
         search_parameters.first_solution_strategy = (
@@ -243,23 +323,31 @@ class VrpSolverEngine:
             if len(stop_indices) > 2:  # More than just start depot -> end depot
                 total_distance_m += route_dist
                 vehicle_distances.append(route_dist / 1000.0)
+                v_cap = float(v_info.get("capacity_kg", 1500.0))
+                r_fuel = compute_route_fuel(route_stops, distance_matrix, duration_matrix, v_cap)
                 routes.append({
                     "vehicle_id": v_info["id"],
                     "vehicle_name": v_info.get("name"),
-                    "vehicle_capacity_kg": v_info.get("capacity_kg"),
+                    "vehicle_capacity_kg": v_cap,
                     "total_distance_m": round(route_dist, 1),
                     "total_duration_sec": int(final_time),
                     "total_demand_kg": round(float(final_load), 1),
                     "stops": route_stops,
                     "stop_indices": stop_indices,
+                    "fuel": r_fuel,
                 })
 
         runtime_ms = int((time.time() - start_time) * 1000)
         total_dist_km = total_distance_m / 1000.0
-        est_fuel_liters = total_dist_km * settings.FUEL_L_PER_KM
-        est_co2_kg = est_fuel_liters * settings.CO2_KG_PER_L
+        
+        total_fuel_liters = sum(r["fuel"]["total_fuel_liters"] for r in routes)
+        total_cruise_fuel = sum(r["fuel"]["cruising_fuel_liters"] for r in routes)
+        total_idle_fuel = sum(r["fuel"]["traffic_idling_fuel_liters"] for r in routes)
+        total_pto_fuel = sum(r["fuel"]["compactor_pto_fuel_liters"] for r in routes)
+
+        est_co2_kg = total_fuel_liters * settings.CO2_KG_PER_L
         driver_hours = (total_travel_time_s + total_service_time_s) / 3600.0
-        est_total_cost = (est_fuel_liters * settings.FUEL_COST_PER_L) + (driver_hours * settings.DRIVER_HOURLY_RATE)
+        est_total_cost = (total_fuel_liters * settings.FUEL_COST_PER_L) + (driver_hours * settings.DRIVER_HOURLY_RATE)
 
         # Workload balance standard deviation
         if vehicle_distances:
@@ -272,6 +360,10 @@ class VrpSolverEngine:
         all_target_nodes = set(i for i in range(num_nodes) if i != depot_index)
         unserved_indices = list(all_target_nodes - served_nodes)
 
+        vehicles_used = len(routes)
+        vehicles_idle = max(0, num_vehicles - vehicles_used)
+        fleet_util_pct = round((vehicles_used / max(1, num_vehicles)) * 100.0, 1)
+
         return {
             "algorithm": "Google OR-Tools CVRP (Guided Local Search)",
             "runtime_ms": runtime_ms,
@@ -280,10 +372,18 @@ class VrpSolverEngine:
                 "total_distance_km": round(total_dist_km, 2),
                 "total_travel_time_sec": int(total_travel_time_s),
                 "total_service_time_sec": int(total_service_time_s),
-                "est_fuel_liters": round(est_fuel_liters, 2),
+                "est_fuel_liters": round(total_fuel_liters, 2),
+                "fuel_breakdown": {
+                    "cruising_fuel_liters": round(total_cruise_fuel, 2),
+                    "traffic_idling_fuel_liters": round(total_idle_fuel, 2),
+                    "compactor_pto_fuel_liters": round(total_pto_fuel, 2),
+                },
                 "est_co2_kg": round(est_co2_kg, 2),
                 "est_total_cost": round(est_total_cost, 2),
-                "vehicles_used": len(routes),
+                "vehicles_used": vehicles_used,
+                "vehicles_idle": vehicles_idle,
+                "vehicles_available": num_vehicles,
+                "fleet_utilization_pct": fleet_util_pct,
                 "stops_served": len(served_nodes),
                 "unserved_count": len(unserved_indices),
                 "workload_balance_std_km": round(std_dist, 2),
