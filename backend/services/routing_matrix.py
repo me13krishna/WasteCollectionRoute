@@ -29,6 +29,10 @@ class DiskCache:
     Persistent file-backed cache for routing matrices and route geometries.
     Prevents redundant calls to OSRM and provides instant offline routing.
     """
+    # Read-only cache shipped with the repo (road shapes and matrices for the ten ready-made
+    # scenarios), so a fresh clone is instant and works offline. New results go to cache_dir.
+    SEED_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "precomputed_cache")
+
     def __init__(self, cache_dir: str):
         self.cache_dir = cache_dir
         try:
@@ -42,12 +46,13 @@ class DiskCache:
 
     def get(self, key: str, prefix: str = "matrix") -> Optional[Any]:
         filepath = self._get_path(key, prefix)
-        if os.path.exists(filepath):
-            try:
-                with open(filepath, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception as e:
-                logger.debug(f"Cache read error for {filepath}: {e}")
+        for path in (filepath, os.path.join(self.SEED_DIR, os.path.basename(filepath))):
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        return json.load(f)
+                except Exception as e:
+                    logger.debug(f"Cache read error for {path}: {e}")
         return None
 
     def set(self, key: str, value: Any, prefix: str = "matrix"):

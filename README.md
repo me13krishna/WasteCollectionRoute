@@ -4,6 +4,8 @@ An AI-powered, software-only platform for optimizing municipal solid waste colle
 
 > **Core Architectural Constraint:** **100% Software-Only** — Strictly zero IoT sensors, smart bins, RFID tags, or vehicle GPS hardware required. All operational updates, dynamic events, and re-optimizations are managed through the web interface and REST API.
 
+> **Quick start on a new machine:** see [SETUP_GUIDE.md](SETUP_GUIDE.md) (install, run, verify, troubleshooting).
+
 ---
 
 ## 🌟 Key Capabilities
