@@ -167,7 +167,9 @@ When presenting this project to evaluators or mentors, follow this step-by-step 
 | `GET` | `/api/v1/routing/status` | Current OSRM routing engine status (Live vs Fallback Mode) | `200 OK` |
 | `GET` | `/api/v1/dataset` | Current collection points, depot, fleet, and active incidents | `200 OK` |
 | `GET` | `/api/v1/traffic/status` | Real-time traffic congestion factor and Pune bottleneck hotspots | `200 OK` |
-| `POST` | `/api/v1/optimize` | Runs Google OR-Tools CVRP solver with Guided Local Search | `200 OK` |
+| `POST` | `/api/v1/dataset/randomize` | Replaces the collection points with a fresh random layout around the depot (`count`, `radius_km`, optional `seed`) | `200 OK` |
+| `POST` | `/api/v1/optimize` | Runs Google OR-Tools CVRP solver with Guided Local Search. `fleet_mode: "exact_fleet"` dispatches exactly `active_vehicles_count` trucks | `200 OK` |
+| `POST` | `/api/v1/optimize/fleet-sweep` | Plans the same points for 1…N trucks and returns distance, finish time, fuel, cost and per-truck detail for each, plus the recommended count | `200 OK` |
 | `POST` | `/api/v1/incidents` | Reports live incident (closure, jam, overflow) & triggers re-routing | `200 OK` |
 | `POST` | `/api/v1/incidents/undo` | Reverts the last incident and restores the prior route plan | `200 OK` |
 | `POST` | `/api/v1/incidents/reset` | Resets all incidents and restores initial baseline plan | `200 OK` |
@@ -218,7 +220,7 @@ python -m pytest -v
 
 - **OSRM Server Timeouts or Rate Limiting:**
   - *Symptom:* Badge shows `Fallback Circuity Mode`.
-  - *Fix:* The platform automatically handles this! It activates the built-in 1.32x urban circuity engine without crashing or disrupting service. For full local independence, follow [docs/OSRM_SETUP.md](file:///c:/Users/Laxmi%20Mishra/OneDrive/Desktop/Krishna/college/Waste%20collection%20Route/docs/OSRM_SETUP.md) to run an offline OSRM container.
+  - *Fix:* The platform automatically handles this! It activates the built-in 1.32x urban circuity engine without crashing or disrupting service. For full local independence, follow [docs/OSRM_SETUP.md](docs/OSRM_SETUP.md) to run an offline OSRM container.
 - **Port 8000 Already in Use:**
   - *Fix:* Run `uvicorn backend.main:app --port 8080 --reload`.
 - **Database Locks on Windows:**

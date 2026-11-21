@@ -112,8 +112,13 @@ class VrpSolverEngine:
         fuel_matrix: Optional[List[List[float]]] = None,
         time_limit_sec: int = 15,
         objective: str = "fuel",
-        optimize_fleet_size: bool = True
+        optimize_fleet_size: bool = True,
+        force_all_vehicles: bool = False
     ) -> Dict[str, Any]:
+        """
+        force_all_vehicles=True dispatches *every* vehicle passed in (each gets at least
+        one stop). Used for "what if I send exactly N trucks?" comparisons.
+        """
         start_time = time.time()
         
         # 1. Validation
@@ -187,10 +192,21 @@ class VrpSolverEngine:
                     time_limit_sec=time_limit_sec,
                     objective=objective,
                     optimize_fleet_size=optimize_fleet_size,
+                    force_all_vehicles=force_all_vehicles,
                     start_time=start_time
                 )
             except Exception as e:
                 logger.error(f"OR-Tools solver execution failed: {e}. Falling back to internal CVRP engine.")
+
+        if force_all_vehicles:
+            return self._solve_exact_fleet_heuristic(
+                depot_index=depot_index,
+                locations=locations,
+                vehicles=vehicles,
+                distance_matrix=distance_matrix,
+                duration_matrix=duration_matrix,
+                start_time=start_time
+            )
 
         return self._solve_with_clark_wright(
             depot_index=depot_index,
@@ -227,8 +243,6 @@ class VrpSolverEngine:
                 reason = "capacity_exceeded"
             elif roundtrip_s > max_shift:
                 reason = "shift_time_exceeded"
-            elif priority <= 2 and remaining_fleet_cap < 200.0:
-                reason = "priority_dropped"
             else:
                 reason = "fleet_exhausted"
 
@@ -255,7 +269,8 @@ class VrpSolverEngine:
         time_limit_sec: int,
         objective: str,
         optimize_fleet_size: bool,
-        start_time: float
+        start_time: float,
+        force_all_vehicles: bool = False
     ) -> Dict[str, Any]:
         num_nodes = len(locations)
         num_vehicles = len(vehicles)
@@ -301,7 +316,7 @@ class VrpSolverEngine:
         routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
 
         # 2. Dynamic Fleet Sizing: Minimize number of vehicles used
-        if optimize_fleet_size:
+        if optimize_fleet_size and not force_all_vehicles:
             fixed_cost = 35000 if (objective == "fuel" and fuel_matrix) else 30000
             routing.SetFixedCostOfAllVehicles(fixed_cost)
 
@@ -340,13 +355,26 @@ class VrpSolverEngine:
             "Time"
         )
 
-        # 5. Disjunctions & Penalty-Weighted Drop Handling
+        # 5. Disjunctions & Penalty-Weighted Drop Handling.
+        # A stop is only dropped when serving it is impossible (capacity / shift time), never
+        # because the detour looks expensive: penalties are floored at a multiple of the most
+        # expensive arc (an insertion never costs more than ~2x that).
+        if objective == "fuel" and fuel_matrix:
+            cost_rows = int_fuel_matrix
+        elif objective in ["duration", "traffic_duration"]:
+            cost_rows = int_duration_matrix
+        else:
+            cost_rows = int_distance_matrix
+        max_arc = max((max(row) for row in cost_rows if row), default=0)
+        penalty = max(50000, 3 * max_arc)  # every stop counts the same
         for node in range(num_nodes):
             if node != depot_index:
-                p = int(locations[node].get("priority", 1))
-                penalty_weights = {1: 50000, 2: 150000, 3: 350000, 4: 1000000}
-                penalty = penalty_weights.get(p, 50000)
                 routing.AddDisjunction([manager.NodeToIndex(node)], penalty)
+
+        # 5b. Exact fleet: every dispatched truck must leave the depot with at least one stop.
+        if force_all_vehicles:
+            for v in range(num_vehicles):
+                routing.solver().Add(routing.NextVar(routing.Start(v)) != routing.End(v))
 
         # 6. Search Parameters
         search_parameters = pywrapcp.DefaultRoutingSearchParameters()
@@ -359,7 +387,29 @@ class VrpSolverEngine:
         search_parameters.time_limit.seconds = time_limit_sec
 
         # Solve
-        solution = routing.SolveWithParameters(search_parameters)
+        solution = None
+        if force_all_vehicles:
+            # Sequential first-solution strategies cannot satisfy "every truck is used", so seed
+            # the search with our own balanced k-route plan and let guided local search refine it.
+            seed = self._build_k_routes(
+                k=num_vehicles,
+                depot_index=depot_index,
+                locations=locations,
+                vehicles=vehicles,
+                distance_matrix=distance_matrix,
+                duration_matrix=duration_matrix
+            )
+            routing.CloseModelWithParameters(search_parameters)
+            initial = routing.ReadAssignmentFromRoutes(seed, True)
+            if initial is not None:
+                solution = routing.SolveFromAssignmentWithParameters(initial, search_parameters)
+            if not solution:
+                logger.warning("OR-Tools exact-fleet seeding failed; using the built-in k-route solver.")
+                return self._solve_exact_fleet_heuristic(
+                    depot_index, locations, vehicles, distance_matrix, duration_matrix, start_time
+                )
+        else:
+            solution = routing.SolveWithParameters(search_parameters)
 
         if not solution:
             logger.warning("OR-Tools could not find a solution. Falling back to Clarke-Wright.")
@@ -441,7 +491,7 @@ class VrpSolverEngine:
                 total_distance_m += route_dist
                 vehicle_distances.append(route_dist / 1000.0)
                 v_cap = float(v_info.get("capacity_kg", 1500.0))
-                r_fuel = compute_route_fuel(route_stops, distance_matrix, duration_matrix, v_cap)
+                r_fuel = compute_route_fuel(route_stops, distance_matrix, duration_matrix, float(v_info.get("fuel_ref_capacity_kg", v_cap)))
                 routes.append({
                     "vehicle_id": v_info["id"],
                     "vehicle_name": v_info.get("name"),
@@ -619,7 +669,251 @@ class VrpSolverEngine:
 
         improved_routes = [two_opt(r) for r in unique_route_lists]
 
-        # Assign routes to vehicles
+        return self._assemble_from_routes(
+            algorithm="Clarke-Wright Savings CVRP + 2-Opt Local Search",
+            route_node_lists=improved_routes,
+            depot_index=depot_index,
+            locations=locations,
+            vehicles=vehicles,
+            distance_matrix=distance_matrix,
+            duration_matrix=duration_matrix,
+            start_time=start_time
+        )
+
+    # ------------------------------------------------------------------
+    # Exact-fleet (dispatch exactly k trucks) heuristic
+    # ------------------------------------------------------------------
+    def _build_k_routes(
+        self,
+        k: int,
+        depot_index: int,
+        locations: List[Dict[str, Any]],
+        vehicles: List[Dict[str, Any]],
+        distance_matrix: List[List[float]],
+        duration_matrix: List[List[float]],
+        max_seconds: float = 1.0
+    ) -> List[List[int]]:
+        """
+        Builds one route per vehicle (list aligned with `vehicles`, depot excluded) using exactly
+        the first `k` vehicles, each with at least one stop when there are enough stops.
+
+        1. Farthest-point seeding gives every truck its own area.
+        2. Remaining stops go in by cheapest feasible insertion (capacity + shift time).
+        3. Local search (2-opt, relocate, swap across trucks) shortens total distance.
+        """
+        D = distance_matrix
+        T = duration_matrix
+        dep = depot_index
+        customers = [i for i in range(len(locations)) if i != dep]
+        routes: List[List[int]] = [[] for _ in vehicles]
+        if not customers:
+            return routes
+
+        k = max(1, min(k, len(vehicles), len(customers)))
+        caps = [float(v.get("capacity_kg", 1500.0)) for v in vehicles]
+        shifts = [float(v.get("max_duration_sec", 28800)) for v in vehicles]
+        dem = {c: float(locations[c].get("demand_kg", 0.0)) for c in customers}
+        svc = {c: float(locations[c].get("service_time_sec", 90)) for c in customers}
+        active = list(range(k))
+
+        def route_time(r: List[int]) -> float:
+            if not r:
+                return 0.0
+            t = T[dep][r[0]] + sum(svc[n] for n in r)
+            for a, b in zip(r, r[1:]):
+                t += T[a][b]
+            return t + T[r[-1]][dep]
+
+        # 1. Seeds (k-center on the distance matrix, starting from the stop farthest from the depot)
+        seeds = [max(customers, key=lambda c: D[dep][c])]
+        while len(seeds) < k:
+            rest = [c for c in customers if c not in seeds]
+            seeds.append(max(rest, key=lambda c: min(D[c][s] for s in seeds)))
+        by_cap = sorted(active, key=lambda v: -caps[v])
+        for v, seed in zip(by_cap, sorted(seeds, key=lambda c: -dem[c])):
+            routes[v] = [seed]
+        loads = [sum(dem[n] for n in r) for r in routes]
+        times = [route_time(r) for r in routes]
+
+        # 2. Cheapest feasible insertion. Big stops first when the fleet is nearly full.
+        placed = set(seeds)
+        remaining = [c for c in customers if c not in placed]
+        tight = sum(dem.values()) > 0.85 * sum(caps[v] for v in active)
+        remaining.sort(key=(lambda c: -dem[c]) if tight else (lambda c: -D[dep][c]))
+        unplaced: List[int] = []
+        for c in remaining:
+            best = None
+            for v in active:
+                if loads[v] + dem[c] > caps[v]:
+                    continue
+                r = routes[v]
+                for pos in range(len(r) + 1):
+                    prev = r[pos - 1] if pos > 0 else dep
+                    nxt = r[pos] if pos < len(r) else dep
+                    if times[v] + T[prev][c] + T[c][nxt] - T[prev][nxt] + svc[c] > shifts[v]:
+                        continue
+                    cost = D[prev][c] + D[c][nxt] - D[prev][nxt]
+                    if best is None or cost < best[0]:
+                        best = (cost, v, pos)
+            if best is None:
+                unplaced.append(c)
+                continue
+            _, v, pos = best
+            routes[v].insert(pos, c)
+            loads[v] += dem[c]
+            times[v] = route_time(routes[v])
+
+        # 3. Local search
+        def path_len(r: List[int]) -> float:
+            if not r:
+                return 0.0
+            return D[dep][r[0]] + sum(D[a][b] for a, b in zip(r, r[1:])) + D[r[-1]][dep]
+
+        def two_opt(v: int) -> bool:
+            r = routes[v]
+            improved_any = False
+            improved = True
+            while improved:
+                improved = False
+                path = [dep] + r + [dep]
+                for a in range(1, len(path) - 2):
+                    for b in range(a + 1, len(path) - 1):
+                        delta = (D[path[a - 1]][path[b]] + D[path[a]][path[b + 1]]
+                                 - D[path[a - 1]][path[a]] - D[path[b]][path[b + 1]])
+                        if delta < -1e-6:
+                            # Road distances are asymmetric: reversing a stretch also changes the
+                            # cost of its inner arcs, so confirm with the exact directed cost
+                            # (otherwise a "gain" can be a loss and the loop never ends).
+                            seg = path[a - 1:b + 2]
+                            rev = path[a - 1:a] + path[b:a - 1:-1] + path[b + 1:b + 2]
+                            old_c = sum(D[x][y] for x, y in zip(seg, seg[1:]))
+                            new_c = sum(D[x][y] for x, y in zip(rev, rev[1:]))
+                            if new_c < old_c - 1e-6:
+                                path[a:b + 1] = path[a:b + 1][::-1]
+                                improved = improved_any = True
+                r[:] = path[1:-1]
+            if improved_any:
+                times[v] = route_time(r)
+            return improved_any
+
+        deadline = time.time() + max_seconds
+        moved = True
+        while moved and time.time() < deadline:
+            moved = False
+            for v in active:
+                moved |= two_opt(v)
+
+            # relocate one stop to another truck
+            for a in active:
+                if len(routes[a]) < 2:
+                    continue
+                done = False
+                for i, c in enumerate(routes[a]):
+                    ra = routes[a]
+                    p = ra[i - 1] if i > 0 else dep
+                    n = ra[i + 1] if i + 1 < len(ra) else dep
+                    gain = D[p][c] + D[c][n] - D[p][n]
+                    for b in active:
+                        if b == a or loads[b] + dem[c] > caps[b]:
+                            continue
+                        rb = routes[b]
+                        for pos in range(len(rb) + 1):
+                            q = rb[pos - 1] if pos > 0 else dep
+                            m = rb[pos] if pos < len(rb) else dep
+                            add = D[q][c] + D[c][m] - D[q][m]
+                            if add - gain < -1e-6 and times[b] + T[q][c] + T[c][m] - T[q][m] + svc[c] <= shifts[b]:
+                                rb.insert(pos, c)
+                                del ra[i]
+                                loads[a] -= dem[c]
+                                loads[b] += dem[c]
+                                times[a] = route_time(ra)
+                                times[b] = route_time(rb)
+                                moved = done = True
+                                break
+                        if done:
+                            break
+                    if done:
+                        break
+
+            # swap two stops between trucks
+            for a in active:
+                for b in active:
+                    if b <= a:
+                        continue
+                    done = False
+                    for i, c in enumerate(routes[a]):
+                        for j, e in enumerate(routes[b]):
+                            if loads[a] - dem[c] + dem[e] > caps[a] or loads[b] - dem[e] + dem[c] > caps[b]:
+                                continue
+                            ra, rb = routes[a], routes[b]
+                            pa = ra[i - 1] if i > 0 else dep
+                            na = ra[i + 1] if i + 1 < len(ra) else dep
+                            pb = rb[j - 1] if j > 0 else dep
+                            nb = rb[j + 1] if j + 1 < len(rb) else dep
+                            old = D[pa][c] + D[c][na] + D[pb][e] + D[e][nb]
+                            new = D[pa][e] + D[e][na] + D[pb][c] + D[c][nb]
+                            if new - old < -1e-6:
+                                ra[i], rb[j] = e, c
+                                new_ta, new_tb = route_time(ra), route_time(rb)
+                                if new_ta > shifts[a] or new_tb > shifts[b]:
+                                    ra[i], rb[j] = c, e  # undo
+                                    continue
+                                loads[a] += dem[e] - dem[c]
+                                loads[b] += dem[c] - dem[e]
+                                times[a], times[b] = new_ta, new_tb
+                                moved = done = True
+                                break
+                        if done:
+                            break
+
+        return routes
+
+    def _solve_exact_fleet_heuristic(
+        self,
+        depot_index: int,
+        locations: List[Dict[str, Any]],
+        vehicles: List[Dict[str, Any]],
+        distance_matrix: List[List[float]],
+        duration_matrix: List[List[float]],
+        start_time: float
+    ) -> Dict[str, Any]:
+        """Pure-Python 'dispatch every truck given' solver (no OR-Tools needed)."""
+        routes = self._build_k_routes(
+            k=len(vehicles),
+            depot_index=depot_index,
+            locations=locations,
+            vehicles=vehicles,
+            distance_matrix=distance_matrix,
+            duration_matrix=duration_matrix,
+            max_seconds=2.0
+        )
+        return self._assemble_from_routes(
+            algorithm="Balanced k-route heuristic (seeding + 2-opt / relocate / swap)",
+            route_node_lists=routes,
+            depot_index=depot_index,
+            locations=locations,
+            vehicles=vehicles,
+            distance_matrix=distance_matrix,
+            duration_matrix=duration_matrix,
+            start_time=start_time
+        )
+
+    def _assemble_from_routes(
+        self,
+        algorithm: str,
+        route_node_lists: List[List[int]],
+        depot_index: int,
+        locations: List[Dict[str, Any]],
+        vehicles: List[Dict[str, Any]],
+        distance_matrix: List[List[float]],
+        duration_matrix: List[List[float]],
+        start_time: float
+    ) -> Dict[str, Any]:
+        """
+        Turns per-vehicle node lists (aligned with `vehicles`, depot excluded) into the standard
+        solution payload: stop timeline, per-route fuel and fleet-level metrics.
+        """
+        customers = [i for i in range(len(locations)) if i != depot_index]
         assigned_routes: List[Dict[str, Any]] = []
         vehicle_distances: List[float] = []
         total_distance_m = 0.0
@@ -628,29 +922,31 @@ class VrpSolverEngine:
         served_nodes = set()
 
         for v_idx, v in enumerate(vehicles):
-            if v_idx >= len(improved_routes):
-                break
-            
-            r_nodes = improved_routes[v_idx]
-            v_id = v["id"]
+            if v_idx >= len(route_node_lists) or not route_node_lists[v_idx]:
+                continue
+
+            r_nodes = route_node_lists[v_idx]
             v_cap = float(v.get("capacity_kg", 1500.0))
-            
+
             route_dist = 0.0
+            route_travel = 0.0
             route_time = 0.0
             curr_load = 0.0
             curr_node = depot_index
 
-            stop_details: List[Dict[str, Any]] = []
             stop_indices = [depot_index]
-
-            stop_details.append({
+            stop_details: List[Dict[str, Any]] = [{
                 "node_idx": depot_index,
                 "is_depot": True,
+                "location_id": None,
+                "location_name": "Depot",
+                "lat": locations[depot_index].get("lat"),
+                "lon": locations[depot_index].get("lon"),
                 "arrival_sec": 0,
                 "departure_sec": 0,
                 "collected_kg": 0.0,
                 "cumulative_kg": 0.0,
-            })
+            }]
 
             for node in r_nodes:
                 travel_m = distance_matrix[curr_node][node]
@@ -659,10 +955,11 @@ class VrpSolverEngine:
                 demand = float(locations[node].get("demand_kg", 0.0))
 
                 route_dist += travel_m
+                route_travel += travel_s
                 route_time += travel_s
                 arr = int(route_time)
                 route_time += svc_s
-                dep = int(route_time)
+                dep_t = int(route_time)
                 curr_load += demand
 
                 stop_indices.append(node)
@@ -677,22 +974,24 @@ class VrpSolverEngine:
                     "lat": locations[node].get("lat"),
                     "lon": locations[node].get("lon"),
                     "arrival_sec": arr,
-                    "departure_sec": dep,
+                    "departure_sec": dep_t,
                     "collected_kg": demand,
                     "cumulative_kg": round(curr_load, 1),
                     "priority": locations[node].get("priority", 1),
                 })
                 curr_node = node
 
-            # Return to depot
-            ret_m = distance_matrix[curr_node][depot_index]
-            ret_s = duration_matrix[curr_node][depot_index]
-            route_dist += ret_m
-            route_time += ret_s
+            route_dist += distance_matrix[curr_node][depot_index]
+            route_travel += duration_matrix[curr_node][depot_index]
+            route_time += duration_matrix[curr_node][depot_index]
             stop_indices.append(depot_index)
             stop_details.append({
                 "node_idx": depot_index,
                 "is_depot": True,
+                "location_id": None,
+                "location_name": "Depot (Return)",
+                "lat": locations[depot_index].get("lat"),
+                "lon": locations[depot_index].get("lon"),
                 "arrival_sec": int(route_time),
                 "departure_sec": int(route_time),
                 "collected_kg": 0.0,
@@ -700,13 +999,11 @@ class VrpSolverEngine:
             })
 
             total_distance_m += route_dist
-            total_travel_time_s += (route_time - len(r_nodes) * 90)
+            total_travel_time_s += route_travel
             vehicle_distances.append(route_dist / 1000.0)
 
-            r_fuel = compute_route_fuel(stop_details, distance_matrix, duration_matrix, v_cap)
-
             assigned_routes.append({
-                "vehicle_id": v_id,
+                "vehicle_id": v["id"],
                 "vehicle_name": v.get("name"),
                 "vehicle_capacity_kg": v_cap,
                 "total_distance_m": round(route_dist, 1),
@@ -714,7 +1011,7 @@ class VrpSolverEngine:
                 "total_demand_kg": round(curr_load, 1),
                 "stops": stop_details,
                 "stop_indices": stop_indices,
-                "fuel": r_fuel,
+                "fuel": compute_route_fuel(stop_details, distance_matrix, duration_matrix, float(v.get("fuel_ref_capacity_kg", v_cap))),
             })
 
         runtime_ms = int((time.time() - start_time) * 1000)
@@ -731,26 +1028,22 @@ class VrpSolverEngine:
 
         if vehicle_distances:
             mean_dist = sum(vehicle_distances) / len(vehicle_distances)
-            var_dist = sum((d - mean_dist) ** 2 for d in vehicle_distances) / len(vehicle_distances)
-            std_dist = math.sqrt(var_dist)
+            std_dist = math.sqrt(sum((d - mean_dist) ** 2 for d in vehicle_distances) / len(vehicle_distances))
         else:
             std_dist = 0.0
 
-        all_target_nodes = set(customers)
-        unserved_indices = sorted(list(all_target_nodes - served_nodes))
-
-        total_served_demand = sum(r["total_demand_kg"] for r in assigned_routes)
+        unserved_indices = sorted(set(customers) - served_nodes)
         unserved_stops_info = self._diagnose_unserved_stops(
             unserved_indices=unserved_indices,
             locations=locations,
             vehicles=vehicles,
             duration_matrix=duration_matrix,
             depot_index=depot_index,
-            total_served_demand=total_served_demand
+            total_served_demand=sum(r["total_demand_kg"] for r in assigned_routes)
         )
 
         return {
-            "algorithm": "Clarke-Wright Savings CVRP + 2-Opt Local Search",
+            "algorithm": algorithm,
             "runtime_ms": runtime_ms,
             "routes": assigned_routes,
             "metrics": {

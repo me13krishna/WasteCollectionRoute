@@ -219,52 +219,63 @@ class RoutingMatrixService:
         MatrixCache.set(cache_key, fallback_res)
         return fallback_res
 
+    async def _osrm_route_chunk(self, coordinates: List[Tuple[float, float]]) -> Optional[List[List[float]]]:
+        coords_str = ";".join([f"{lon:.6f},{lat:.6f}" for lat, lon in coordinates])
+        url = f"{self.base_url}/route/v1/driving/{coords_str}?overview=full&geometries=geojson"
+        try:
+            async with httpx.AsyncClient(timeout=max(settings.OSRM_TIMEOUT_SEC, 6.0)) as client:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get("code") == "Ok" and data.get("routes"):
+                        return data["routes"][0]["geometry"]["coordinates"]
+        except Exception as e:
+            logger.debug(f"OSRM route geometry service unavailable: {e}")
+        return None
+
     async def get_route_geometry(
         self, coordinates: List[Tuple[float, float]]
     ) -> List[List[float]]:
         """
         Given ordered list of (lat, lon), fetch full route geometry (list of [lon, lat])
-        from OSRM /route service, or generate realistic road-following polyline.
+        from OSRM /route service (long routes are fetched in overlapping chunks),
+        or generate a street-grid polyline when OSRM is unavailable.
         """
         if len(coordinates) < 2:
             return [[lon, lat] for lat, lon in coordinates]
 
-        geom_cache_key = f"geom_{len(coordinates)}_{coordinates[0]}_{coordinates[-1]}"
+        # Key on every coordinate: routes that share endpoints and length must not collide.
+        geom_cache_key = "geom_v2_" + ";".join(f"{lat:.5f},{lon:.5f}" for lat, lon in coordinates)
         cached_geom = self._disk_cache.get(geom_cache_key, prefix="geom")
         if cached_geom:
             return cached_geom
 
-        if self._service_reachable and len(coordinates) <= 70:
-            try:
-                coords_str = ";".join([f"{lon:.6f},{lat:.6f}" for lat, lon in coordinates])
-                url = f"{self.base_url}/route/v1/driving/{coords_str}?overview=full&geometries=geojson"
+        if self._service_reachable:
+            max_chunk = 40
+            geometry: List[List[float]] = []
+            ok = True
+            start = 0
+            while start < len(coordinates) - 1:
+                end = min(start + max_chunk, len(coordinates))
+                part = await self._osrm_route_chunk(coordinates[start:end])
+                if part is None:
+                    ok = False
+                    break
+                geometry.extend(part if not geometry else part[1:])
+                start = end - 1
+            if ok and geometry:
+                self._disk_cache.set(geom_cache_key, geometry, prefix="geom")
+                return geometry
 
-                async with httpx.AsyncClient(timeout=settings.OSRM_TIMEOUT_SEC) as client:
-                    resp = await client.get(url)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        if data.get("code") == "Ok" and data.get("routes"):
-                            geometry = data["routes"][0]["geometry"]["coordinates"]
-                            self._disk_cache.set(geom_cache_key, geometry, prefix="geom")
-                            return geometry
-            except Exception as e:
-                logger.debug(f"OSRM route geometry service unavailable: {e}")
-
-        # Road curvature interpolation fallback:
-        # Generates intermediate street grid elbows for urban visual realism
+        # Street-grid fallback: intermediate elbows for urban visual realism
         result: List[List[float]] = []
         for i in range(len(coordinates) - 1):
             lat1, lon1 = coordinates[i]
             lat2, lon2 = coordinates[i+1]
             result.append([lon1, lat1])
-            # Add intermediate street grid elbow for road realism
-            mid_lon = lon2
-            mid_lat = lat1
-            result.append([mid_lon, mid_lat])
+            result.append([lon2, lat1])
         last_lat, last_lon = coordinates[-1]
         result.append([last_lon, last_lat])
-
-        self._disk_cache.set(geom_cache_key, result, prefix="geom")
         return result
 
 routing_service = RoutingMatrixService()

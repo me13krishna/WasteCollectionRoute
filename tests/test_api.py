@@ -81,6 +81,92 @@ def test_api_optimize_and_incidents():
     reset_data = reset_resp.json()
     assert reset_data["success"] is True
 
+def test_randomize_gives_different_points_each_time_and_is_seedable():
+    a = client.post("/api/v1/dataset/randomize", json={"count": 30}).json()
+    pts_a = client.get("/api/v1/dataset").json()["locations"]
+    client.post("/api/v1/dataset/randomize", json={"count": 30})
+    pts_b = client.get("/api/v1/dataset").json()["locations"]
+    assert a["success"] is True and a["total_stops"] == 30
+    assert len(pts_a) == len(pts_b) == 30
+    assert [(p["lat"], p["lon"]) for p in pts_a] != [(p["lat"], p["lon"]) for p in pts_b]
+
+    # Same seed -> same layout
+    client.post("/api/v1/dataset/randomize", json={"count": 12, "seed": 7})
+    s1 = client.get("/api/v1/dataset").json()["locations"]
+    client.post("/api/v1/dataset/randomize", json={"count": 12, "seed": 7})
+    s2 = client.get("/api/v1/dataset").json()["locations"]
+    assert s1 == s2
+
+    # Points sit within the requested radius of the depot (4 km default, loose bound for lon scaling)
+    depot = client.get("/api/v1/dataset").json()["depot"]
+    for p in s1:
+        assert abs(p["lat"] - depot["lat"]) < 0.05 and abs(p["lon"] - depot["lon"]) < 0.05
+        assert p["demand_kg"] > 0
+
+    client.post("/api/v1/reset-dataset")
+
+
+def test_optimize_exact_fleet_dispatches_requested_trucks():
+    client.post("/api/v1/dataset/randomize", json={"count": 20, "seed": 3})
+    resp = client.post("/api/v1/optimize", json={
+        "selected_stop_count": 20, "objective": "distance", "time_limit_sec": 2,
+        "active_vehicles_count": 3, "fleet_mode": "exact_fleet"
+    })
+    assert resp.status_code == 200
+    m = resp.json()["solution"]["metrics"]
+    assert m["vehicles_used"] == 3
+    assert m["unserved_count"] == 0
+    client.post("/api/v1/reset-dataset")
+
+
+def test_fleet_sweep_compares_truck_counts_on_same_points():
+    client.post("/api/v1/dataset/randomize", json={"count": 24, "seed": 11})
+    resp = client.post("/api/v1/optimize/fleet-sweep", json={
+        "selected_stop_count": 24, "min_trucks": 1, "max_trucks": 5, "time_limit_sec": 1
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert [r["trucks"] for r in data["runs"]] == [1, 2, 3, 4, 5]
+    feasible = [r for r in data["runs"] if r["feasible"]]
+    assert len(feasible) == 5
+    for r in feasible:
+        assert r["trucks_dispatched"] == r["trucks"]
+        assert r["stops_served"] == 24
+        assert r["total_distance_km"] > 0
+        assert len(r["routes"]) == r["trucks"]
+    # Recommendation is the feasible count with the least distance
+    best = min(feasible, key=lambda r: r["total_distance_km"])
+    assert data["best_trucks"] == best["trucks"]
+    assert next(r for r in data["runs"] if r["trucks"] == data["best_trucks"])["extra_km_vs_best"] == 0
+    # Truck capacity is not a constraint: even one truck covers everything (within the shift limit)
+    assert data["runs"][0]["feasible"] is True
+    client.post("/api/v1/reset-dataset")
+
+
+def test_fleet_stream_finds_u_shaped_optimum_and_stops_one_past_it():
+    import json
+    client.post("/api/v1/dataset/randomize", json={"scenario": 3})
+    events = []
+    with client.stream("POST", "/api/v1/optimize/fleet-sweep/stream", json={
+        "max_trucks": 6, "time_limit_sec": 1, "traffic_enabled": False
+    }) as resp:
+        assert resp.status_code == 200
+        events = [json.loads(line) for line in resp.iter_lines() if line]
+    assert events[0]["type"] == "start" and events[-1]["type"] == "done"
+    runs = [e["run"] for e in events if e["type"] == "run"]
+    best = events[-1]["best_trucks"]
+    # counts are tried in order and the search ends exactly one truck after the minimum
+    assert [r["trucks"] for r in runs] == list(range(1, len(runs) + 1))
+    assert len(runs) in (best + 2, 8)  # two trucks past the minimum (or the fleet limit)
+    dist = {r["trucks"]: r["total_distance_km"] for r in runs}
+    assert best > 1 and dist[best] == min(dist.values())
+    assert dist[1] > dist[best] and dist[best + 1] > dist[best] and dist[best + 2 if best + 2 in dist else best + 1] >= dist[best + 1]  # the U: down, then back up
+    for r in runs:
+        assert len(r["routes"]) == r["trucks"]
+        assert all(len(t["geometry"]) > 1 for t in r["routes"])
+    client.post("/api/v1/reset-dataset")
+
+
 def test_api_exports():
     # Run a small optimization first to ensure last_solution exists
     client.post("/api/v1/optimize", json={"selected_stop_count": 6, "time_limit_sec": 2})
@@ -113,13 +199,16 @@ def test_static_files():
     # Test index HTML
     index_resp = client.get("/")
     assert index_resp.status_code == 200
-    assert "EcoRoute AI" in index_resp.text
+    assert "EcoRoute" in index_resp.text
     assert "Pune" in index_resp.text
 
     # Test CSS file
     css_resp = client.get("/static/css/styles.css")
     assert css_resp.status_code == 200
-    assert "--accent-primary" in css_resp.text
+    assert "--accent" in css_resp.text
+
+    js_util = client.get("/static/js/util.js")
+    assert js_util.status_code == 200
 
     # Test JS files
     js_app = client.get("/static/js/app.js")

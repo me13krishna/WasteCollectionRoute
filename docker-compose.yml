@@ -11,7 +11,7 @@ services:
       - "8000:8000"
     environment:
       - PROJECT_NAME=EcoRoute AI - Municipal Waste Collection
-      - DATABASE_URL=sqlite:///./waste_route.db
+      - DATABASE_URL=sqlite:////app/db/waste_route.db
       - OSRM_BASE_URL=https://router.project-osrm.org
       - CURRENCY_SYMBOL=₹
       - CURRENCY_CODE=INR
@@ -21,7 +21,10 @@ services:
       - DRIVER_HOURLY_RATE=250.00
     volumes:
       - ./backend/data:/app/backend/data
-      - ecoroute_data:/app
+      # Live frontend: edits to HTML/CSS/JS show on browser refresh, no rebuild needed.
+      - ./backend/static:/app/backend/static:ro
+      # Persist only the SQLite file; mounting a volume over /app would pin stale code across rebuilds.
+      - ecoroute_data:/app/db
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/dataset || exit 1"]
       interval: 20s

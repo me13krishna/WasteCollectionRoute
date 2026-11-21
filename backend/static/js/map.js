@@ -1,74 +1,151 @@
 /**
- * EcoRoute AI - Map Management Module
- * Leaflet map setup, custom SVG markers, route polylines, layers & traffic visualization.
+ * EcoRoute - map module
+ * Basemap, stops, routes, traffic, incidents, and single-driver focus mode.
  */
 
-let mapInstance = null;
-let currentTileLayer = null;
-let depotMarker = null;
-let stopsClusterGroup = null;
-let routeLayersGroup = null;
-let baselineLayersGroup = null;
-let trafficOverlayGroup = null;
-let incidentMarkersGroup = null;
+import { esc, cssVar } from './util.js';
 
-let clickMode = null; // 'road_closure' | 'urgent_pickup' | null
+let mapInstance = null;
+let baseLayer = null;
+let labelLayer = null;
+let canvasRenderer = null;
+let depotMarker = null;
+
+let stopsLayer = null;     // all collection points (dots)
+let routeLayer = null;     // optimized routes (casing + line)
+let focusLayer = null;     // numbered stops of the focused route
+let baselineLayer = null;
+let trafficLayer = null;
+let incidentLayer = null;
+let fleetLayer = null;      // truck-count finder: roads filling in
+let fleetToken = 0;         // bumped to cancel a running fill animation
+
+let routeShapes = new Map(); // vehicle_id -> { casing, line, route }
+let stopMarkers = [];        // { marker, loc, vehicleId }
+let focusedVehicle = null;
+let onRouteClick = null;
+
+let clickMode = null;
 let onMapClickCallback = null;
+
+const ESRI = 'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas';
+const ESRI_ATTR = 'Tiles © Esri — Esri, HERE, Garmin, © OpenStreetMap contributors';
+
+const PLACEMENT_TEXT = {
+  road_closure: 'Click a road to close it',
+  traffic_jam: 'Click where the traffic jam is',
+  urgent_pickup: 'Click where the overflowing bin is'
+};
+
+const INCIDENT_STYLE = {
+  road_closure: { color: '--p4', letter: 'C' },
+  traffic_jam: { color: '--p3', letter: 'T' },
+  urgent_pickup: { color: '--p4', letter: '!' },
+  emergency_pickup: { color: '--p4', letter: '!' }
+};
+
+const latlngs = (geom) => (geom || []).map(pt => [pt[1], pt[0]]);
+
+
+const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+
+/** Planar cumulative length along a polyline (good enough to pace an animation). */
+function cumulative(coords) {
+  const k = Math.cos((coords[0][0] * Math.PI) / 180);
+  const cum = [0];
+  for (let i = 1; i < coords.length; i++) {
+    const dy = coords[i][0] - coords[i - 1][0];
+    const dx = (coords[i][1] - coords[i - 1][1]) * k;
+    cum.push(cum[i - 1] + Math.hypot(dx, dy));
+  }
+  return cum;
+}
+
+/** The first `frac` of a polyline, ending exactly at the interpolated tip. */
+function partial(coords, cum, frac) {
+  const total = cum[cum.length - 1];
+  if (frac <= 0 || total === 0) return [coords[0]];
+  if (frac >= 1) return coords;
+  const target = total * frac;
+  let lo = 0;
+  let hi = cum.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (cum[mid] <= target) lo = mid; else hi = mid;
+  }
+  const span = cum[hi] - cum[lo] || 1;
+  const f = (target - cum[lo]) / span;
+  const tip = [coords[lo][0] + (coords[hi][0] - coords[lo][0]) * f, coords[lo][1] + (coords[hi][1] - coords[lo][1]) * f];
+  return [...coords.slice(0, lo + 1), tip];
+}
 
 export const mapManager = {
   init(containerId = 'map', defaultCenter = [18.5204, 73.8480], defaultZoom = 13) {
     if (mapInstance) return mapInstance;
 
     mapInstance = L.map(containerId, {
+      maxZoom: 19,
+      minZoom: 3,
       zoomControl: false,
-      attributionControl: false
+      zoomSnap: 0.25
     }).setView(defaultCenter, defaultZoom);
-
-    // Zoom control in top right
+    mapInstance.attributionControl.setPrefix(false);
     L.control.zoom({ position: 'topright' }).addTo(mapInstance);
 
-    // Layer Groups
-    stopsClusterGroup = L.markerClusterGroup({
-      maxClusterRadius: 40,
-      spiderfyOnMaxZoom: true,
-      showCoverageOnHover: false
-    });
-    routeLayersGroup = L.layerGroup().addTo(mapInstance);
-    baselineLayersGroup = L.layerGroup();
-    trafficOverlayGroup = L.layerGroup().addTo(mapInstance);
-    incidentMarkersGroup = L.layerGroup().addTo(mapInstance);
+    mapInstance.createPane('labels');
+    mapInstance.getPane('labels').style.zIndex = 450; // above routes, below markers
+    mapInstance.getPane('labels').style.pointerEvents = 'none';
 
-    mapInstance.addLayer(stopsClusterGroup);
+    mapInstance.createPane('stops');
+    mapInstance.getPane('stops').style.zIndex = 460; // dots sit above route lines and labels
+    canvasRenderer = L.canvas({ padding: 0.5, pane: 'stops' });
+    baselineLayer = L.layerGroup();
+    trafficLayer = L.layerGroup().addTo(mapInstance);
+    routeLayer = L.layerGroup().addTo(mapInstance);
+    stopsLayer = L.layerGroup().addTo(mapInstance);
+    focusLayer = L.layerGroup().addTo(mapInstance);
+    incidentLayer = L.layerGroup().addTo(mapInstance);
+    fleetLayer = L.layerGroup().addTo(mapInstance);
 
-    // Tile Layer based on theme
     this.updateTileLayer();
 
-    // Map click handler for interactive incident placement
     mapInstance.on('click', (e) => {
       if (clickMode && onMapClickCallback) {
-        onMapClickCallback(e.latlng.lat, e.latlng.lng, clickMode);
+        const cb = onMapClickCallback;
+        const mode = clickMode;
         this.exitClickMode();
+        cb(e.latlng.lat, e.latlng.lng, mode);
       }
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && clickMode) { e.preventDefault(); this.exitClickMode(); }
     });
 
     return mapInstance;
   },
 
+  get map() { return mapInstance; },
+
+  invalidate() {
+    mapInstance?.invalidateSize();
+  },
+
   updateTileLayer() {
-    const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
-    const tileUrl = isDark
-      ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
-      : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
-
-    if (currentTileLayer && mapInstance) {
-      mapInstance.removeLayer(currentTileLayer);
-    }
-
-    currentTileLayer = L.tileLayer(tileUrl, {
-      maxZoom: 19,
-      subdomains: 'abcd'
+    if (!mapInstance) return;
+    const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const tone = dark ? 'World_Dark_Gray' : 'World_Light_Gray';
+    baseLayer && mapInstance.removeLayer(baseLayer);
+    labelLayer && mapInstance.removeLayer(labelLayer);
+    baseLayer = L.tileLayer(`${ESRI}/${tone}_Base/MapServer/tile/{z}/{y}/{x}`, {
+      maxNativeZoom: 16, maxZoom: 19, attribution: ESRI_ATTR
+    }).addTo(mapInstance);
+    labelLayer = L.tileLayer(`${ESRI}/${tone}_Reference/MapServer/tile/{z}/{y}/{x}`, {
+      maxNativeZoom: 16, maxZoom: 19, pane: 'labels'
     }).addTo(mapInstance);
   },
+
+  /* ---------- Incident placement ---------- */
 
   setClickMode(mode, callback) {
     clickMode = mode;
@@ -76,236 +153,322 @@ export const mapManager = {
     const banner = document.getElementById('placement-banner');
     const bannerText = document.getElementById('placement-banner-text');
     if (banner && bannerText) {
-      banner.style.display = 'flex';
-      bannerText.innerText = mode === 'road_closure'
-        ? 'Click anywhere on the road to place a ROAD CLOSURE 🚧'
-        : 'Click on the map to place an URGENT COLLECTION BIN 🚨';
+      bannerText.textContent = PLACEMENT_TEXT[mode] || 'Click on the map';
+      banner.hidden = false;
     }
-    if (mapInstance) {
-      mapInstance.getContainer().style.cursor = 'crosshair';
-    }
+    document.querySelectorAll('[data-place]').forEach(b => b.classList.toggle('armed', b.dataset.place === mode));
+    mapInstance.getContainer().style.cursor = 'crosshair';
   },
 
   exitClickMode() {
     clickMode = null;
     onMapClickCallback = null;
     const banner = document.getElementById('placement-banner');
-    if (banner) banner.style.display = 'none';
-    if (mapInstance) {
-      mapInstance.getContainer().style.cursor = '';
-    }
+    if (banner) banner.hidden = true;
+    document.querySelectorAll('[data-place]').forEach(b => b.classList.remove('armed'));
+    if (mapInstance) mapInstance.getContainer().style.cursor = '';
   },
+
+  /* ---------- Depot & stops ---------- */
 
   renderDepot(depot) {
     if (!mapInstance || !depot) return;
     if (depotMarker) mapInstance.removeLayer(depotMarker);
-
-    const iconHtml = `
-      <div style="background:#0f172a; border:2px solid #10b981; width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; box-shadow:0 0 16px rgba(16,185,129,0.8); color:#10b981; font-size:16px;">
-        🏛️
-      </div>
-    `;
-    const depotIcon = L.divIcon({
-      html: iconHtml,
-      className: 'depot-marker-wrapper',
-      iconSize: [34, 34],
-      iconAnchor: [17, 17]
-    });
-
-    depotMarker = L.marker([depot.lat, depot.lon], { icon: depotIcon })
+    depotMarker = L.marker([depot.lat, depot.lon], {
+      icon: L.divIcon({ html: '<div class="mk-depot"></div>', className: 'mk', iconSize: [16, 16], iconAnchor: [8, 8] }),
+      zIndexOffset: 500,
+      title: depot.name
+    })
       .bindPopup(`
-        <div style="font-family:Inter,sans-serif; font-size:12px; color:#111;">
-          <strong style="font-size:13px; color:#10b981;">${depot.name}</strong><br/>
-          <span>${depot.address || 'Central Solid Waste Hub'}</span><br/>
-          <span style="font-size:10px; color:#6b7280;">Depot Coordinates: ${depot.lat.toFixed(4)}, ${depot.lon.toFixed(4)}</span>
-        </div>
+        <div class="popup-title">${esc(depot.name)}</div>
+        <div class="popup-meta">Depot · every route starts and ends here</div>
       `)
       .addTo(mapInstance);
   },
 
-  renderStops(locations, stopSequenceMap = {}) {
-    if (!stopsClusterGroup) return;
-    stopsClusterGroup.clearLayers();
-
-    const priorityColors = {
-      1: '#3b82f6', // Normal (Blue)
-      2: '#10b981', // Moderate (Green)
-      3: '#f59e0b', // High (Amber)
-      4: '#ef4444'  // Urgent (Red)
-    };
+  /**
+   * @param locations all collection points
+   * @param assignment location_id -> { color, seq, vehicleId, driver } for planned stops
+   */
+  renderStops(locations, assignment = {}) {
+    if (!stopsLayer) return;
+    stopsLayer.clearLayers();
+    stopMarkers = [];
+    const hasPlan = Object.keys(assignment).length > 0;
+    const surface = cssVar('--surface');
+    const muted = cssVar('--muted');
 
     locations.forEach(loc => {
-      const pColor = priorityColors[loc.priority] || '#3b82f6';
-      const seq = stopSequenceMap[loc.id] !== undefined ? `#${stopSequenceMap[loc.id]}` : '';
+      const a = assignment[loc.id];
+      const fill = a ? a.color : (hasPlan ? surface : cssVar('--p1'));
+      const marker = L.circleMarker([loc.lat, loc.lon], {
+        renderer: canvasRenderer,
+        radius: 4.5,
+        weight: 1.5,
+        color: a || !hasPlan ? surface : muted,
+        fillColor: fill,
+        fillOpacity: 1
+      }).bindPopup(`
+        <div class="popup-title">${esc(loc.name)}</div>
+        <div class="popup-meta">#${loc.id}${loc.status !== 'pending' ? ' · ' + esc(loc.status) : ''}</div>
+        <div>${loc.demand_kg} kg · ${Math.round(loc.service_time_sec / 60 * 10) / 10} min service</div>
+        ${a ? `<div class="popup-meta">Stop ${a.seq} for ${esc(a.driver || 'truck ' + a.vehicleId)}</div>` : (hasPlan ? '<div class="popup-meta">Not in this plan</div>' : '')}
+      `);
+      stopsLayer.addLayer(marker);
+      stopMarkers.push({ marker, loc, vehicleId: a ? a.vehicleId : null });
+    });
 
-      const iconHtml = `
-        <div class="custom-stop-marker" style="background:${pColor}; width:22px; height:22px; border-radius:50%; border:2px solid #fff; display:flex; align-items:center; justify-content:center; font-size:9px; font-weight:bold; box-shadow:0 2px 6px rgba(0,0,0,0.4);">
-          ${seq || loc.priority}
-        </div>
-      `;
+    if (focusedVehicle != null) this.applyFocusStyles();
+  },
 
-      const stopIcon = L.divIcon({
-        html: iconHtml,
-        className: 'stop-marker-wrapper',
-        iconSize: [22, 22],
-        iconAnchor: [11, 11]
+  fitToData(depot, locations) {
+    if (!mapInstance) return;
+    const pts = (locations || []).map(l => [l.lat, l.lon]);
+    if (depot) pts.push([depot.lat, depot.lon]);
+    if (pts.length > 1) mapInstance.fitBounds(pts, { padding: [48, 48] });
+    else if (pts.length === 1) mapInstance.setView(pts[0], 14);
+  },
+
+  /* ---------- Fleet finder: roads fill in truck by truck ---------- */
+
+  fleetClear() {
+    fleetToken += 1;
+    fleetLayer?.clearLayers();
+  },
+
+  /**
+   * Draws every truck's route, filling in smoothly from the depot. Trucks start slightly one after
+   * another so each road is seen being laid down. Resolves when finished or cancelled.
+   * `duration: 0` draws the finished routes at once.
+   */
+  fleetPlay(routes, { duration = 3200, fit = true } = {}) {
+    if (!fleetLayer) return Promise.resolve();
+    this.fleetClear();
+    const token = fleetToken;
+    const casingColor = cssVar('--surface');
+
+    const shapes = routes
+      .map(r => ({ r, coords: latlngs(r.geometry) }))
+      .filter(s => s.coords.length > 1)
+      .map(s => {
+        const casing = L.polyline([s.coords[0]], { color: casingColor, weight: 7, opacity: 0.9, lineCap: 'round', lineJoin: 'round', interactive: false });
+        const line = L.polyline([s.coords[0]], { color: s.r.color, weight: 3.5, opacity: 0.95, lineCap: 'round', lineJoin: 'round', interactive: false });
+        const head = L.circleMarker(s.coords[0], { radius: 5, weight: 2, color: casingColor, fillColor: s.r.color, fillOpacity: 1, interactive: false });
+        fleetLayer.addLayer(casing); fleetLayer.addLayer(line); fleetLayer.addLayer(head);
+        return { ...s, casing, line, head, cum: cumulative(s.coords) };
       });
 
-      const marker = L.marker([loc.lat, loc.lon], { icon: stopIcon })
-        .bindPopup(`
-          <div style="font-family:Inter,sans-serif; font-size:12px; color:#111; min-width:180px;">
-            <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #e5e7eb; padding-bottom:4px; margin-bottom:6px;">
-              <strong style="color:#111827;">${loc.name}</strong>
-              <span style="background:${pColor}20; color:${pColor}; padding:2px 6px; border-radius:10px; font-weight:bold; font-size:10px;">P${loc.priority}</span>
-            </div>
-            <div>📦 Demand: <strong>${loc.demand_kg} kg</strong></div>
-            <div>⏱️ Service Time: <strong>${loc.service_time_sec}s</strong></div>
-            <div>📍 Status: <strong>${loc.status}</strong></div>
-            ${seq ? `<div style="margin-top:4px; color:#059669; font-weight:bold;">Dispatched Stop: ${seq}</div>` : ''}
-          </div>
-        `);
+    if (fit && shapes.length) {
+      mapInstance.fitBounds(shapes.flatMap(s => s.coords), { padding: [48, 48], animate: false });
+    }
 
-      stopsClusterGroup.addLayer(marker);
+    const setProgress = (s, frac) => {
+      const pts = partial(s.coords, s.cum, frac);
+      s.casing.setLatLngs(pts);
+      s.line.setLatLngs(pts);
+      s.head.setLatLng(pts[pts.length - 1]);
+      s.head.setStyle({ opacity: frac >= 1 ? 0 : 1, fillOpacity: frac >= 1 ? 0 : 1 });
+    };
+
+    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (!duration || reduced || !shapes.length) {
+      shapes.forEach(s => setProgress(s, 1));
+      return Promise.resolve();
+    }
+
+    const n = shapes.length;
+    const stagger = n > 1 ? Math.min(0.12, 0.5 / (n - 1)) : 0; // fraction of total time between starts
+    const window_ = 1 - stagger * (n - 1);
+    return new Promise(resolve => {
+      const t0 = performance.now();
+      const frame = (now) => {
+        if (token !== fleetToken) { resolve(); return; }
+        const t = Math.min(1, (now - t0) / duration);
+        shapes.forEach((s, i) => {
+          const local = Math.min(1, Math.max(0, (t - i * stagger) / window_));
+          setProgress(s, easeInOut(local));
+        });
+        if (t < 1) requestAnimationFrame(frame); else resolve();
+      };
+      requestAnimationFrame(frame);
     });
   },
 
-  renderRoutes(routes) {
-    if (!routeLayersGroup) return;
-    routeLayersGroup.clearLayers();
+  /* ---------- Routes ---------- */
+
+  setRouteClickHandler(fn) { onRouteClick = fn; },
+
+  clearRoutes() {
+    routeLayer?.clearLayers();
+    baselineLayer?.clearLayers();
+    trafficLayer?.clearLayers();
+    focusLayer?.clearLayers();
+    this.fleetClear();
+    routeShapes = new Map();
+    focusedVehicle = null;
+  },
+
+  renderRoutes(routes, { fit = true } = {}) {
+    if (!routeLayer) return;
+    this.fleetClear();
+    routeLayer.clearLayers();
+    routeShapes = new Map();
+    const casingColor = cssVar('--surface');
 
     routes.forEach(r => {
-      const coords = (r.geometry || []).map(pt => [pt[1], pt[0]]);
+      const coords = latlngs(r.geometry);
       if (coords.length < 2) return;
-
-      const polyline = L.polyline(coords, {
-        color: r.color || '#10b981',
-        weight: 4.5,
-        opacity: 0.9,
-        lineCap: 'round',
-        lineJoin: 'round'
-      }).bindPopup(`
-        <div style="font-family:Inter,sans-serif; font-size:12px; color:#111;">
-          <strong style="font-size:13px; color:${r.color};">${r.vehicle_name}</strong><br/>
-          <span>Distance: <strong>${(r.total_distance_m / 1000.0).toFixed(2)} km</strong></span><br/>
-          <span>Payload: <strong>${r.total_demand_kg} / ${r.vehicle_capacity_kg} kg</strong></span><br/>
-          <span>Stops: <strong>${r.stops.length} collections</strong></span>
-        </div>
-      `);
-
-      // Hover emphasis
-      polyline.on('mouseover', () => polyline.setStyle({ weight: 7, opacity: 1.0 }));
-      polyline.on('mouseout', () => polyline.setStyle({ weight: 4.5, opacity: 0.9 }));
-
-      routeLayersGroup.addLayer(polyline);
+      const casing = L.polyline(coords, { color: casingColor, weight: 7, opacity: 0.9, lineCap: 'round', lineJoin: 'round', interactive: false });
+      const line = L.polyline(coords, { color: r.color, weight: 3.5, opacity: 0.95, lineCap: 'round', lineJoin: 'round' });
+      line.on('click', (e) => { L.DomEvent.stopPropagation(e); onRouteClick?.(r.vehicle_id); });
+      line.on('mouseover', () => { if (focusedVehicle == null) line.setStyle({ weight: 5.5 }); });
+      line.on('mouseout', () => { if (focusedVehicle == null) line.setStyle({ weight: 3.5 }); });
+      line.bindTooltip(esc(r.driver || r.vehicle_name), { sticky: true, direction: 'top', className: 'tip' });
+      routeLayer.addLayer(casing);
+      routeLayer.addLayer(line);
+      routeShapes.set(r.vehicle_id, { casing, line, route: r });
     });
 
-    if (routes.length > 0 && mapInstance) {
-      const allCoords = routes.flatMap(r => (r.geometry || []).map(pt => [pt[1], pt[0]]));
-      if (allCoords.length > 0) {
-        mapInstance.fitBounds(allCoords, { padding: [40, 40] });
+    if (focusedVehicle != null && routeShapes.has(focusedVehicle)) {
+      this.focusRoute(focusedVehicle, { fit: false });
+    } else {
+      focusedVehicle = null;
+      focusLayer.clearLayers();
+      if (fit) {
+        const all = routes.flatMap(r => latlngs(r.geometry));
+        if (all.length > 1) mapInstance.fitBounds(all, { padding: [48, 48] });
       }
     }
   },
 
-  renderBaselineOverlay(baselineRoutes) {
-    if (!baselineLayersGroup) return;
-    baselineLayersGroup.clearLayers();
+  /** Highlight one driver's route; null clears focus. */
+  focusRoute(vehicleId, { fit = true, padRight = 0 } = {}) {
+    focusedVehicle = vehicleId;
+    focusLayer.clearLayers();
 
-    baselineRoutes.forEach(r => {
-      const coords = (r.geometry || []).map(pt => [pt[1], pt[0]]);
-      if (coords.length < 2) return;
+    const shape = vehicleId != null ? routeShapes.get(vehicleId) : null;
+    if (!shape) {
+      focusedVehicle = null;
+      this.applyFocusStyles();
+      return;
+    }
 
-      const poly = L.polyline(coords, {
-        color: '#94a3b8',
-        weight: 3,
-        dashArray: '6, 8',
-        opacity: 0.65
+    // Numbered markers for this route's collection stops, in visiting order.
+    let n = 0;
+    shape.route.stops.forEach(s => {
+      if (s.is_depot) return;
+      n += 1;
+      const seq = n;
+      focusLayer.addLayer(L.marker([s.lat, s.lon], {
+        icon: L.divIcon({
+          className: 'mk',
+          html: `<div class="mk-seq" style="--c:${shape.route.color}">${seq}</div>`,
+          iconSize: [20, 20],
+          iconAnchor: [10, 10]
+        }),
+        zIndexOffset: 600
+      }).on('click', () => this.onSeqClick?.(seq)));
+    });
+
+    this.applyFocusStyles();
+    shape.casing.bringToFront();
+    shape.line.bringToFront();
+
+    if (fit) {
+      mapInstance.fitBounds(shape.line.getBounds(), {
+        paddingTopLeft: [48, 48],
+        paddingBottomRight: [48 + padRight, 80]
       });
-      baselineLayersGroup.addLayer(poly);
+    }
+  },
+
+  applyFocusStyles() {
+    const f = focusedVehicle;
+    routeShapes.forEach((s, id) => {
+      const on = f == null || id === f;
+      s.line.setStyle({ opacity: on ? 0.95 : 0.12, weight: f != null && id === f ? 5 : 3.5 });
+      s.casing.setStyle({ opacity: on ? 0.9 : 0 });
+    });
+    stopMarkers.forEach(({ marker, vehicleId }) => {
+      const on = f == null;
+      const hidden = f != null && vehicleId === f; // replaced by numbered markers
+      marker.setStyle({ opacity: hidden ? 0 : (on ? 1 : 0.25), fillOpacity: hidden ? 0 : (on ? 1 : 0.25) });
+    });
+  },
+
+  panTo(lat, lon) {
+    mapInstance.panTo([lat, lon], { animate: true });
+  },
+
+  renderBaselineOverlay(baselineRoutes) {
+    if (!baselineLayer) return;
+    baselineLayer.clearLayers();
+    const color = cssVar('--muted');
+    baselineRoutes.forEach(r => {
+      const coords = latlngs(r.geometry);
+      if (coords.length < 2) return;
+      baselineLayer.addLayer(L.polyline(coords, { color, weight: 2, dashArray: '4 6', opacity: 0.8, interactive: false }));
     });
   },
 
   renderTraffic(hotspots, overlaySegments) {
-    if (!trafficOverlayGroup) return;
-    trafficOverlayGroup.clearLayers();
+    if (!trafficLayer) return;
+    trafficLayer.clearLayers();
+    const hot = cssVar('--p4');
 
-    // Hotspot circles
     (hotspots || []).forEach(spot => {
-      const circle = L.circle([spot.lat, spot.lon], {
+      trafficLayer.addLayer(L.circle([spot.lat, spot.lon], {
         radius: spot.radius_m,
-        color: '#f43f5e',
-        fillColor: '#f43f5e',
-        fillOpacity: 0.18,
-        weight: 1.5,
-        dashArray: '4, 4'
+        color: hot, fillColor: hot, fillOpacity: 0.05, weight: 1, opacity: 0.5, dashArray: '2 4'
       }).bindPopup(`
-        <div style="font-family:Inter,sans-serif; font-size:12px; color:#111;">
-          <strong style="color:#dc2626;">Traffic Bottleneck Hotspot</strong><br/>
-          <span>${spot.name}</span><br/>
-          <span>Base Congestion: <strong>${spot.base_congestion}x delay</strong></span>
-        </div>
-      `);
-      trafficOverlayGroup.addLayer(circle);
+        <div class="popup-title">${esc(spot.name)}</div>
+        <div class="popup-meta">Congestion hotspot · ${spot.base_congestion}× slower</div>
+      `));
     });
 
-    // Dynamic Congestion Segments
-    (overlaySegments || []).forEach(seg => {
-      const poly = L.polyline([seg.from_coord, seg.to_coord], {
-        color: seg.color || '#f59e0b',
-        weight: seg.level === 'closed' ? 5 : 3.5,
-        opacity: 0.75,
-        dashArray: seg.level === 'closed' ? '4, 6' : null
-      });
-      trafficOverlayGroup.addLayer(poly);
-    });
+    // overlaySegments are straight stop-to-stop matrix pairs, not roads; drawing them
+    // produces an unreadable starburst, so only the hotspot zones are shown.
+    void overlaySegments;
   },
 
   renderIncidents(incidents) {
-    if (!incidentMarkersGroup) return;
-    incidentMarkersGroup.clearLayers();
-
+    if (!incidentLayer) return;
+    incidentLayer.clearLayers();
     (incidents || []).forEach(inc => {
-      if (!inc.active || !inc.lat || !inc.lon) return;
-
-      const isClosure = inc.incident_type === 'road_closure';
-      const iconChar = isClosure ? '🚧' : (inc.incident_type === 'traffic_jam' ? '🚗' : '🚨');
-      const bgColor = isClosure ? '#dc2626' : '#f59e0b';
-
-      const iconHtml = `
-        <div style="background:${bgColor}; width:28px; height:28px; border-radius:50%; display:flex; align-items:center; justify-content:center; box-shadow:0 0 12px ${bgColor}; border:2px solid #fff; font-size:14px;">
-          ${iconChar}
-        </div>
-      `;
-
-      const marker = L.marker([inc.lat, inc.lon], {
-        icon: L.divIcon({ html: iconHtml, className: 'incident-marker', iconSize: [28, 28], iconAnchor: [14, 14] })
+      if (inc.active === false || inc.lat == null || inc.lon == null) return;
+      if (inc.incident_type === 'missed_stop') return; // shown on the stop itself
+      const style = INCIDENT_STYLE[inc.incident_type] || { color: '--p3', letter: '?' };
+      incidentLayer.addLayer(L.marker([inc.lat, inc.lon], {
+        icon: L.divIcon({
+          html: `<div class="mk-incident" style="background:${cssVar(style.color)}"><span>${style.letter}</span></div>`,
+          className: 'mk', iconSize: [18, 18], iconAnchor: [9, 9]
+        }),
+        zIndexOffset: 900
       }).bindPopup(`
-        <div style="font-family:Inter,sans-serif; font-size:12px; color:#111;">
-          <strong style="color:${bgColor}; text-transform:uppercase;">${inc.incident_type.replace('_', ' ')}</strong><br/>
-          <span>${inc.description}</span><br/>
-          <span style="font-size:10px; color:#6b7280;">Reported: ${inc.timestamp}</span>
-        </div>
-      `);
-
-      incidentMarkersGroup.addLayer(marker);
+        <div class="popup-title">${esc(labelForIncident(inc.incident_type))}</div>
+        <div>${esc(inc.description)}</div>
+        <div class="popup-meta">${esc(inc.timestamp || '')}</div>
+      `));
     });
   },
 
   toggleBaseline(show) {
-    if (!mapInstance || !baselineLayersGroup) return;
-    if (show) {
-      mapInstance.addLayer(baselineLayersGroup);
-    } else {
-      mapInstance.removeLayer(baselineLayersGroup);
-    }
+    if (!mapInstance) return;
+    show ? mapInstance.addLayer(baselineLayer) : mapInstance.removeLayer(baselineLayer);
   },
 
   toggleTraffic(show) {
-    if (!mapInstance || !trafficOverlayGroup) return;
-    if (show) {
-      mapInstance.addLayer(trafficOverlayGroup);
-    } else {
-      mapInstance.removeLayer(trafficOverlayGroup);
-    }
+    if (!mapInstance) return;
+    show ? mapInstance.addLayer(trafficLayer) : mapInstance.removeLayer(trafficLayer);
   }
 };
+
+export function labelForIncident(type) {
+  return ({
+    road_closure: 'Road closure',
+    traffic_jam: 'Traffic jam',
+    urgent_pickup: 'Overflowing bin',
+    emergency_pickup: 'Overflowing bin',
+    missed_stop: 'Missed stop'
+  })[type] || String(type || '').replace(/_/g, ' ');
+}

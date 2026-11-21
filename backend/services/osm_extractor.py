@@ -98,15 +98,12 @@ class OpenStreetMapExtractor:
             if "marketplace" in amenity or "disposal" in amenity:
                 demand = 120.0
                 svc = 120
-                priority = 3
             elif "recycling" in amenity:
                 demand = 85.0
                 svc = 90
-                priority = 2
             else:
                 demand = 60.0
                 svc = 75
-                priority = 1
                 
             points.append({
                 "id": idx + 1,
@@ -115,7 +112,6 @@ class OpenStreetMapExtractor:
                 "lon": round(float(el["lon"]), 6),
                 "demand_kg": demand,
                 "service_time_sec": svc,
-                "priority": priority,
                 "required": True,
                 "status": "pending"
             })
@@ -135,7 +131,6 @@ class OpenStreetMapExtractor:
                 "lon": round(center_lon + dlon, 6),
                 "demand_kg": round(random.choice([50, 75, 90, 110, 130]), 1),
                 "service_time_sec": random.choice([60, 90, 120]),
-                "priority": random.choice([1, 1, 2, 2, 3]),
                 "required": True,
                 "status": "pending"
             })

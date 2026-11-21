@@ -1,448 +1,360 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>EcoRoute AI — Municipal Waste Collection Route Optimizer (Pune Smart City)</title>
-  
-  <!-- Inter Google Font -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  
-  <!-- Leaflet CSS -->
+  <title>EcoRoute</title>
+  <script>
+    // Apply saved / system theme before first paint to avoid a flash.
+    (function () {
+      var t = null;
+      try { t = localStorage.getItem('ecoroute-theme'); } catch (e) {}
+      if (!t) t = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
-  <!-- Leaflet MarkerCluster CSS -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>
-  
-  <!-- Custom Modern Dashboard Stylesheet -->
   <link rel="stylesheet" href="/static/css/styles.css">
 </head>
 <body>
 
-  <!-- Top Navigation Control Room Bar -->
   <header class="topbar">
     <div class="topbar-left">
-      <button id="toggle-sidebar-btn" class="icon-btn" title="Toggle Sidebar" aria-label="Toggle Navigation Sidebar">
-        ☰
+      <button id="toggle-sidebar-btn" class="icon-btn" title="Toggle panel" aria-label="Toggle panel">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12M2 8h12M2 12h12"/></svg>
       </button>
-      <a href="/" class="brand-logo">
-        <div class="brand-icon">♻</div>
-        <span>EcoRoute AI</span>
-      </a>
-      <span class="brand-badge">Smart City Ops</span>
-      <div class="city-pill">
-        <span>📍</span>
-        <span id="active-city-label">Pune (PMC), Maharashtra</span>
-      </div>
+      <a href="/" class="brand"><span class="brand-mark"></span>EcoRoute</a>
+      <span id="active-city-label" class="muted">Pune</span>
     </div>
 
     <div class="topbar-right">
-      <!-- OSRM Status Indicator -->
-      <div class="status-badge" title="Road Network Routing Engine Status">
-        <span id="osrm-status-dot" class="status-dot done"></span>
-        <span id="osrm-status-text">Live OSRM Engine</span>
-      </div>
-
-      <!-- Solver Status Indicator -->
-      <div class="status-badge">
-        <span id="solver-status-dot" class="status-dot idle"></span>
+      <span class="status" title="Road network engine">
+        <span id="osrm-status-dot" class="dot"></span>
+        <span id="osrm-status-text">Routing</span>
+      </span>
+      <span class="status" title="Time-of-day traffic">
+        <span class="dot dot-warn"></span>
+        <span id="traffic-period-badge">Traffic</span>
+      </span>
+      <span class="status">
+        <span id="solver-status-dot" class="dot"></span>
         <span id="solver-status-text">Idle</span>
-      </div>
-
-      <!-- Traffic Period Badge -->
-      <div class="status-badge" style="border-color: rgba(245, 158, 11, 0.4);">
-        <span>🚦</span>
-        <span id="traffic-period-badge">Real-Time Traffic Active</span>
-      </div>
-
-      <!-- Theme Switcher -->
-      <button id="theme-toggle-btn" class="icon-btn" title="Toggle Dark/Light Theme" aria-label="Toggle Theme">
-        🌓
+      </span>
+      <button id="theme-toggle-btn" class="icon-btn" title="Toggle theme" aria-label="Toggle theme">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11" /><path d="M8 2.5a5.5 5.5 0 0 1 0 11z" fill="currentColor"/></svg>
       </button>
     </div>
   </header>
 
-  <!-- Main Container -->
-  <div class="app-container">
-    
-    <!-- Left Operations Sidebar -->
+  <div class="app">
     <aside id="sidebar" class="sidebar">
-      <!-- Tab Navigation -->
-      <nav class="sidebar-nav">
-        <button class="nav-tab active" data-tab="setup">
-          <span>⚙️</span>
-          <span>Setup</span>
-        </button>
-        <button class="nav-tab" data-tab="optimize">
-          <span>⚡</span>
-          <span>Optimize</span>
-        </button>
-        <button class="nav-tab" data-tab="results">
-          <span>📊</span>
-          <span>Results</span>
-        </button>
-        <button class="nav-tab" data-tab="incidents">
-          <span>🚨</span>
-          <span>Incidents</span>
-        </button>
-        <button class="nav-tab" data-tab="export">
-          <span>📥</span>
-          <span>Export</span>
-        </button>
+      <nav class="tabs" role="tablist">
+        <button class="tab active" data-tab="optimize">Plan</button>
+        <button class="tab" data-tab="results">Results</button>
+        <button class="tab" data-tab="fleet" hidden>Fleet size</button>
+        <button class="tab" data-tab="incidents">Incidents</button>
+        <button class="tab" data-tab="setup">Data</button>
+        <button class="tab" data-tab="export">Export</button>
       </nav>
 
-      <!-- TAB 1: Setup & Data Ingestion -->
-      <div id="tab-setup" class="tab-content active">
-        <div class="card">
-          <div class="card-title">
-            <span>Collection Dataset</span>
-            <span id="setup-total-stops" style="font-size:11px; color:var(--accent-primary);">80 points</span>
+      <div class="panel-scroll">
+
+        <!-- PLAN -->
+        <section id="tab-optimize" class="tab-content active">
+          <h2 class="section-title">Collection points</h2>
+
+          <div class="field">
+            <label for="rand-scenario">Layout</label>
+            <select id="rand-scenario"><option value="">Random (different every time)</option></select>
           </div>
-          <p style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">
-            Pre-loaded with 80 authentic municipal bins across Pune (Shivajinagar, Kothrud, Central Peths, Swargate, Hadapsar).
-          </p>
-          <div style="display:flex; gap:8px;">
-            <a href="/api/v1/export/template" class="btn btn-secondary btn-sm" style="flex:1;">
-              📥 CSV Template
-            </a>
-            <label class="btn btn-secondary btn-sm" style="flex:1; cursor:pointer;">
-              📤 Upload CSV
-              <input type="file" id="csv-upload-input" accept=".csv" style="display:none;">
+          <div class="field" id="rand-count-field">
+            <div class="field-row">
+              <label for="rand-count">Number of points</label>
+              <span id="rand-count-val" class="value">40</span>
+            </div>
+            <input type="range" id="rand-count" min="10" max="150" value="40" step="5">
+          </div>
+          <button id="btn-randomize" class="btn btn-block">Generate points</button>
+          <div hidden>
+          <label class="check check-spaced" id="randomize-each-label">
+            <input type="checkbox" id="opt-randomize-each">
+            <span>New random points on every run</span>
+          </label>
+
+          
+
+          <div class="field">
+            <div class="field-row">
+              <label for="opt-veh-count">Trucks</label>
+              <span id="opt-veh-count-val" class="value">4</span>
+            </div>
+            <input type="range" id="opt-veh-count" min="1" max="8" value="4" step="1">
+          </div>
+
+          <div class="field">
+            <div class="field-row">
+              <label for="opt-time-limit">Solver time</label>
+              <span id="opt-time-limit-val" class="value">15s</span>
+            </div>
+            <input type="range" id="opt-time-limit" min="3" max="45" value="15" step="1">
+          </div>
+
+          <div class="field">
+            <label for="opt-objective">Minimize</label>
+            <select id="opt-objective">
+              <option value="fuel" selected>Fuel and CO₂</option>
+              <option value="traffic_duration">Travel time in traffic</option>
+              <option value="distance">Road distance</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="opt-fleet-mode">Dispatch</label>
+            <select id="opt-fleet-mode">
+              <option value="exact_fleet" selected>Dispatch exactly this many trucks</option>
+              <option value="auto_minimize_vehicles">As few as needed (up to this many)</option>
+              <option value="fixed_fleet">Up to this many, solver decides</option>
+            </select>
+          </div>
+
+          <label class="check">
+            <input type="checkbox" id="opt-traffic-enabled" checked>
+            <span>Account for live traffic</span>
+          </label>
+
+          </div>
+
+          <button id="btn-run-optimize" class="btn btn-primary btn-block">Optimize routes</button>
+
+          <div id="uc-body" hidden>
+            <div id="uc-summary" class="callout"></div>
+
+            <h2 class="section-title spaced">Distance by number of trucks</h2>
+            <p class="muted small">Click a bar to see that many trucks on the map.</p>
+            <div class="chart-box tall"><canvas id="ucChart"></canvas></div>
+
+            <label class="check check-spaced">
+              <input type="checkbox" id="uc-show-all">
+              <span>Play every count in turn</span>
             </label>
-          </div>
-        </div>
 
-        <div class="card">
-          <div class="card-title">
-            <span>Ingest Global City (OSM Overpass)</span>
-            <span>🌐</span>
-          </div>
-          <p style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">
-            Extract real waste disposal & recycling infrastructure dynamically from OpenStreetMap Overpass API (100% free).
-          </p>
-          <div class="form-group">
-            <input type="text" id="osm-city-input" class="form-control" placeholder="e.g. Pune, Mumbai, Delhi" value="Pune">
-          </div>
-          <button id="btn-extract-osm" class="btn btn-secondary btn-sm" style="width:100%;">
-            Fetch Live City Infrastructure
-          </button>
-        </div>
-
-        <div class="card">
-          <div class="card-title">
-            <span>PMC Municipal Fleet (4 Vehicles)</span>
-            <span>🚛</span>
-          </div>
-          <div id="vehicles-list-view">
-            <!-- Dynamically populated -->
-          </div>
-        </div>
-      </div>
-
-      <!-- TAB 2: Optimize & Dispatch Controls -->
-      <div id="tab-optimize" class="tab-content">
-        <div class="card">
-          <div class="card-title">
-            <span>CVRP Solver Configuration</span>
-            <span>🧮</span>
+            <h2 class="section-title spaced">On the map</h2>
+            <dl id="uc-kpis" class="kpis"></dl>
+            <div id="uc-trucks" class="uc-trucks"></div>
           </div>
 
-          <div class="form-group">
-            <label class="form-label">Collection Stops To Service</label>
-            <div class="range-slider-group">
-              <input type="range" id="opt-stop-count" class="range-slider" min="10" max="80" value="50" step="5">
-              <span id="opt-stop-count-val" class="range-val">50</span>
+          <h2 class="section-title spaced">Fleet</h2>
+          <div id="vehicles-list-view" class="list"></div>
+        </section>
+
+        <!-- RESULTS -->
+        <section id="tab-results" class="tab-content">
+          <div id="results-empty" class="empty">
+            <p>No plan yet.</p>
+            <p class="muted">Run an optimization from the Plan tab to see routes, savings and workload.</p>
+          </div>
+
+          <div id="results-body" hidden>
+            <h2 class="section-title">Saved vs. nearest-neighbor</h2>
+            <div class="savings">
+              <div><div id="saving-km" class="big">0</div><div class="muted small">Distance</div></div>
+              <div><div id="saving-fuel" class="big">0</div><div class="muted small">Diesel</div></div>
+              <div><div id="saving-cost" class="big">0</div><div class="muted small">Cost</div></div>
+            </div>
+
+            <div id="route-diff-banner" class="note" hidden></div>
+            <div id="unserved-banner" class="note note-warn" hidden></div>
+
+            <dl class="kpis">
+              <div><dt>Distance</dt><dd id="kpi-distance">–</dd></div>
+              <div><dt>Diesel</dt><dd id="kpi-fuel">–</dd></div>
+              <div><dt>CO₂</dt><dd id="kpi-co2">–</dd></div>
+              <div><dt>Cost</dt><dd id="kpi-cost">–</dd></div>
+              <div><dt>Trucks used</dt><dd id="kpi-vehicles">–</dd></div>
+              <div><dt>Drive time</dt><dd id="kpi-duration">–</dd></div>
+            </dl>
+
+            <h2 class="section-title spaced">Baseline vs. optimized</h2>
+            <div class="chart-box"><canvas id="comparisonChart"></canvas></div>
+
+            <h2 class="section-title spaced">Garbage per truck (kg)</h2>
+            <div class="chart-box short"><canvas id="workloadChart"></canvas></div>
+
+            <h2 class="section-title spaced">Routes</h2>
+            <div id="results-vehicle-table" class="list"></div>
+          </div>
+        </section>
+
+        <!-- FLEET SIZE -->
+        <section id="tab-fleet" class="tab-content">
+          <h2 class="section-title">How many trucks?</h2>
+          <p class="muted small">Plans the current points with 1, 2, 3 … trucks and stops one truck after the shortest total distance. Too few trucks mean long routes, unload trips and overtime; too many each add their own trip out to the area. The bottom of that U is the optimal fleet. Distances here are illustrative demo values; the routes drawn use your real points and roads.</p>
+
+          <div class="field">
+            <div class="field-row">
+              <label for="fleet-max">Try up to</label>
+              <span id="fleet-max-val" class="value">8 trucks</span>
+            </div>
+            <input type="range" id="fleet-max" min="2" max="8" value="8" step="1">
+          </div>
+          <div class="field">
+            <div class="field-row">
+              <label for="fleet-time">Solver time per count</label>
+              <span id="fleet-time-val" class="value">4s</span>
+            </div>
+            <input type="range" id="fleet-time" min="1" max="15" value="4" step="1">
+          </div>
+          <h2 class="section-title spaced">Full comparison</h2>
+          <p class="muted small">Tries every count up to the limit above and ranks them by distance, finish time and cost.</p>
+          <button id="btn-run-sweep" class="btn btn-block">Compare truck counts</button>
+
+          <div id="fleet-empty" class="empty">
+            <p>No comparison yet.</p>
+            <p class="muted">Generate or load points on the Plan tab, then compare.</p>
+          </div>
+
+          <div id="fleet-body" hidden>
+            <div id="fleet-summary" class="callout"></div>
+
+            <h2 class="section-title spaced">Distance and finish time</h2>
+            <div class="chart-box"><canvas id="fleetChart"></canvas></div>
+
+            <h2 class="section-title spaced">By truck count</h2>
+            <table class="ft" id="fleet-table">
+              <thead><tr><th>Trucks</th><th>Distance</th><th>Finish</th><th>Cost</th><th></th></tr></thead>
+              <tbody></tbody>
+            </table>
+            <p class="muted small ft-foot">Finish is when the last truck is back at the depot. Select a row for details.</p>
+          </div>
+        </section>
+
+        <!-- INCIDENTS -->
+        <section id="tab-incidents" class="tab-content">
+          <h2 class="section-title">Report an incident</h2>
+          <p class="muted small">Routes are re-optimized automatically after each report.</p>
+
+          <div class="btn-grid">
+            <button id="btn-add-road-closure" class="btn">Road closure</button>
+            <button id="btn-add-traffic-jam" class="btn">Traffic jam</button>
+            <button id="btn-add-urgent-pickup" class="btn">Overflowing bin</button>
+          </div>
+          <p class="muted small">Choose one, then click its location on the map.</p>
+
+          <div class="field">
+            <label for="missed-stop-select">Missed stop</label>
+            <div class="inline">
+              <select id="missed-stop-select"></select>
+              <button id="btn-report-missed" class="btn">Report</button>
             </div>
           </div>
 
-          <div class="form-group">
-            <label class="form-label">Available Vehicles (Max Dispatched)</label>
-            <div class="range-slider-group">
-              <input type="range" id="opt-veh-count" class="range-slider" min="1" max="4" value="4" step="1">
-              <span id="opt-veh-count-val" class="range-val">4</span>
-            </div>
+          <div class="inline">
+            <button id="btn-undo-incident" class="btn btn-block">Undo last</button>
+            <button id="btn-reset-incidents" class="btn btn-block btn-danger">Clear all</button>
           </div>
 
-          <div class="form-group">
-            <label class="form-label">Optimization Objective</label>
-            <select id="opt-objective" class="form-select">
-              <option value="fuel" selected>Fuel & CO₂ Emissions (EEA MEET Model)</option>
-              <option value="traffic_duration">Traffic Congestion Travel Time</option>
-              <option value="distance">Shortest Road Distance (km)</option>
-            </select>
+          <h2 class="section-title spaced">Log</h2>
+          <div id="incidents-timeline" class="list"></div>
+        </section>
+
+        <!-- DATA -->
+        <section id="tab-setup" class="tab-content">
+          <h2 class="section-title">Collection points</h2>
+          <p class="muted small"><span id="setup-total-stops">0 points</span> loaded around the depot.</p>
+
+          <div class="inline">
+            <label class="btn btn-block">
+              Upload CSV
+              <input type="file" id="csv-upload-input" accept=".csv" hidden>
+            </label>
+            <a href="/api/v1/export/template" class="btn btn-block">CSV template</a>
+          </div>
+          <button id="btn-reset-dataset" class="btn btn-block">Restore Pune sample data</button>
+
+          <h2 class="section-title spaced">Import a city from OpenStreetMap</h2>
+          <div class="inline">
+            <input type="text" id="osm-city-input" placeholder="City name" value="Pune">
+            <button id="btn-extract-osm" class="btn">Import</button>
+          </div>
+          <p class="muted small">Pulls waste baskets and recycling points within 5 km of the city centre. Needs internet access.</p>
+        </section>
+
+        <!-- EXPORT -->
+        <section id="tab-export" class="tab-content">
+          <h2 class="section-title">Export current plan</h2>
+          <p id="export-hint" class="muted small">Run an optimization first.</p>
+          <div class="stack">
+            <a id="export-geojson" href="/api/v1/export/geojson" download class="btn btn-block is-disabled">GeoJSON (routes and stops)</a>
+            <a id="export-manifest" href="/api/v1/export/manifest" download class="btn btn-block is-disabled">Driver manifest (CSV)</a>
+            <a id="export-report" href="/api/v1/export/report-html" target="_blank" rel="noopener" class="btn btn-block is-disabled">Printable shift report</a>
           </div>
 
-          <div class="form-group">
-            <label class="form-label">Fleet Sizing Strategy</label>
-            <select id="opt-fleet-mode" class="form-select">
-              <option value="auto_minimize_vehicles" selected>Auto-Minimize Vehicles (Reduce Fixed Costs)</option>
-              <option value="fixed_fleet">Fixed Fleet (Utilize All Available Trucks)</option>
-            </select>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label">Solver Time Limit</label>
-            <div class="range-slider-group">
-              <input type="range" id="opt-time-limit" class="range-slider" min="3" max="45" value="15" step="1">
-              <span id="opt-time-limit-val" class="range-val">15s</span>
-            </div>
-          </div>
-
-          <button id="btn-run-optimize" class="btn btn-primary" style="margin-top:10px;">
-            ⚡ Optimize Multi-Vehicle Routes
-          </button>
-        </div>
-
-        <div class="card" style="font-size:12px; color:var(--text-muted);">
-          <strong style="color:var(--text-main); display:block; margin-bottom:6px;">Algorithm Specs:</strong>
-          • Google OR-Tools CVRP with Guided Local Search metaheuristic.<br/>
-          • Strict vehicle capacity limits & 8-hour shift constraints.<br/>
-          • Real-time congestion matrices from live Pune traffic bottlenecks.<br/>
-          • Load-dependent diesel rate (0.36 - 0.54 L/km) + 2.4 L/hr idling.
-        </div>
-      </div>
-
-      <!-- TAB 3: Results & Analytics -->
-      <div id="tab-results" class="tab-content">
-        <!-- Savings Highlight Banner -->
-        <div class="savings-banner">
-          <div class="savings-header">
-            <span>SAVINGS OVER NEAREST-NEIGHBOR BASELINE</span>
-            <span>⭐</span>
-          </div>
-          <div class="savings-stats">
-            <div class="saving-item">
-              <div id="saving-km" class="val">-0 km</div>
-              <div class="lbl">Distance</div>
-            </div>
-            <div class="saving-item">
-              <div id="saving-fuel" class="val">-0 L</div>
-              <div class="lbl">Fuel</div>
-            </div>
-            <div class="saving-item">
-              <div id="saving-cost" class="val">-₹0</div>
-              <div class="lbl">Total Cost</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Before / After Diff Alert -->
-        <div id="route-diff-banner" style="display:none; background:rgba(6,182,212,0.15); border:1px solid #06b6d4; border-radius:var(--radius-sm); padding:8px 12px; font-size:12px; color:#22d3ee; margin-bottom:12px;"></div>
-
-        <!-- KPI Grid -->
-        <div class="kpi-grid">
-          <div class="kpi-card">
-            <div class="kpi-label">Total Distance</div>
-            <div id="kpi-distance" class="kpi-value">0.0 km</div>
-            <div class="kpi-sub">Actual road network</div>
-          </div>
-          <div class="kpi-card">
-            <div class="kpi-label">Diesel Consumed</div>
-            <div id="kpi-fuel" class="kpi-value">0.0 L</div>
-            <div class="kpi-sub">EEA MEET model</div>
-          </div>
-          <div class="kpi-card">
-            <div class="kpi-label">CO₂ Emissions</div>
-            <div id="kpi-co2" class="kpi-value">0.0 kg</div>
-            <div class="kpi-sub">2.68 kg CO₂/L</div>
-          </div>
-          <div class="kpi-card">
-            <div class="kpi-label">Estimated Cost</div>
-            <div id="kpi-cost" class="kpi-value">₹0</div>
-            <div class="kpi-sub">Fuel ₹94.5 + Crew ₹250/h</div>
-          </div>
-          <div class="kpi-card">
-            <div class="kpi-label">Trucks Dispatched</div>
-            <div id="kpi-vehicles" class="kpi-value">0 / 4</div>
-            <div class="kpi-sub">Dynamic fleet sizing</div>
-          </div>
-          <div class="kpi-card">
-            <div class="kpi-label">Est. Duration</div>
-            <div id="kpi-duration" class="kpi-value">0 min</div>
-            <div class="kpi-sub">Travel + service time</div>
-          </div>
-        </div>
-
-        <!-- Chart 1: Comparison Bar Chart -->
-        <div class="card">
-          <div class="card-title">
-            <span>Baseline vs OR-Tools Comparison</span>
-          </div>
-          <div style="height:220px; position:relative;">
-            <canvas id="comparisonChart"></canvas>
-          </div>
-        </div>
-
-        <!-- Chart 2: Vehicle Workload Balance -->
-        <div class="card">
-          <div class="card-title">
-            <span>Workload Balance (Payload vs Capacity)</span>
-          </div>
-          <div style="height:180px; position:relative;">
-            <canvas id="workloadChart"></canvas>
-          </div>
-        </div>
-
-        <!-- Vehicle Route Details Table -->
-        <div class="card">
-          <div class="card-title">
-            <span>Per-Vehicle Routes Breakdown</span>
-          </div>
-          <div id="results-vehicle-table">
-            <!-- Dynamically populated -->
-          </div>
-        </div>
-      </div>
-
-      <!-- TAB 4: Live Incidents & Dynamic Rerouting -->
-      <div id="tab-incidents" class="tab-content">
-        <div class="card">
-          <div class="card-title">
-            <span>Interactive Incident Reporting</span>
-            <span>🚨</span>
-          </div>
-          <p style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">
-            Simulate real-time smart city events. Click a button below to place on the map or trigger re-routing.
-          </p>
-
-          <div style="display:flex; flex-direction:column; gap:8px;">
-            <button id="btn-add-road-closure" class="btn btn-danger btn-sm">
-              🚧 Place Road Closure (Click Map)
-            </button>
-            <button id="btn-add-urgent-pickup" class="btn btn-secondary btn-sm">
-              🚨 Add Urgent Bin Overflow (Click Map)
-            </button>
-          </div>
-
-          <div style="margin-top:14px; border-top:1px solid var(--border-color); padding-top:12px;">
-            <label class="form-label">Report Missed Collection Point</label>
-            <div style="display:flex; gap:6px;">
-              <select id="missed-stop-select" class="form-select" style="font-size:11px;">
-                <!-- Populated dynamically -->
-              </select>
-              <button id="btn-report-missed" class="btn btn-secondary btn-sm" style="white-space:nowrap;">
-                Mark Missed
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Action Control Buttons -->
-        <div style="display:flex; gap:8px; margin-bottom:14px;">
-          <button id="btn-undo-incident" class="btn btn-secondary btn-sm" style="flex:1;">
-            ↩️ Undo Last Incident
-          </button>
-          <button id="btn-reset-incidents" class="btn btn-danger btn-sm" style="flex:1;">
-            🔄 Reset to Initial Plan
-          </button>
-        </div>
-
-        <!-- Live Incident Log Timeline -->
-        <div class="card">
-          <div class="card-title">
-            <span>Incident Timeline Log</span>
-          </div>
-          <div id="incidents-timeline" class="timeline">
-            <!-- Dynamically populated -->
-          </div>
-        </div>
-      </div>
-
-      <!-- TAB 5: Export & Reports -->
-      <div id="tab-export" class="tab-content">
-        <div class="card">
-          <div class="card-title">
-            <span>Export Optimization Plans</span>
-            <span>💾</span>
-          </div>
-          <p style="font-size:12px; color:var(--text-muted); margin-bottom:14px;">
-            Export standard formats for GIS integration (QGIS, ArcGIS) and municipal driver paperless dispatch.
-          </p>
-
-          <div style="display:flex; flex-direction:column; gap:10px;">
-            <a href="/api/v1/export/geojson" download class="btn btn-secondary">
-              🗺️ Download GeoJSON (Road Routes & Stops)
-            </a>
-            <a href="/api/v1/export/manifest" download class="btn btn-secondary">
-              📄 Download Driver Manifest (CSV)
-            </a>
-            <a href="/api/v1/export/report-html" target="_blank" class="btn btn-primary">
-              🖨️ Open Printable Driver HTML Shift Report
-            </a>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-title">
-            <span>Smart City System Architecture</span>
-          </div>
-          <div style="font-size:11px; color:var(--text-muted); line-height:1.6;">
-            <strong>Backend:</strong> FastAPI, Python 3.11+, SQLAlchemy<br/>
-            <strong>CVRP Solver:</strong> Google OR-Tools Guided Local Search<br/>
-            <strong>Routing Matrix:</strong> OSRM with 1.32x Urban Circuity Fallback<br/>
-            <strong>Emissions Model:</strong> European Environmental Agency (EEA) MEET<br/>
-            <strong>GIS Ingestion:</strong> 100% Free OpenStreetMap Overpass API<br/>
-            <strong>Hardware:</strong> 100% Software-Only (Zero IoT/RFID required)
-          </div>
-        </div>
+          <h2 class="section-title spaced">About</h2>
+          <p class="muted small">OR-Tools CVRP with guided local search, OSRM road distances (straight-line × 1.32 when offline), EEA MEET fuel model. Software only, no sensors required.</p>
+        </section>
       </div>
     </aside>
 
-    <!-- Map View Area -->
-    <main class="map-wrapper">
+    <main class="map-wrap">
       <div id="map"></div>
 
-      <!-- Placement Alert Banner -->
-      <div id="placement-banner" class="incident-placement-mode" style="display:none;">
-        <span id="placement-banner-text">Click anywhere on the map</span>
-        <button id="btn-cancel-placement" style="background:#fff; color:#111; border:none; padding:2px 8px; border-radius:4px; cursor:pointer; font-size:11px; font-weight:bold;">Cancel</button>
+      <div id="placement-banner" class="placement" hidden>
+        <span id="placement-banner-text">Click on the map</span>
+        <button id="btn-cancel-placement" class="btn btn-sm">Cancel</button>
       </div>
 
-      <!-- Floating Quick Map Filters / Layer Toggles -->
-      <div class="map-layers-dock">
-        <strong style="color:var(--text-main); display:block; margin-bottom:4px;">Map Layers</strong>
-        <label class="layer-toggle">
-          <input type="checkbox" id="layer-toggle-traffic" checked>
-          <span>Traffic Congestion</span>
-        </label>
-        <label class="layer-toggle">
-          <input type="checkbox" id="layer-toggle-baseline">
-          <span>Baseline Routes Overlay</span>
-        </label>
+      <div class="map-panel layers">
+        <div id="drivers-legend" class="drivers" hidden></div>
+        <label class="check"><input type="checkbox" id="layer-toggle-traffic" checked><span>Traffic</span></label>
+        <label class="check"><input type="checkbox" id="layer-toggle-baseline"><span>Baseline routes</span></label>
       </div>
 
-      <!-- Animated Truck Shift Simulation Dock -->
-      <div class="simulation-dock">
-        <button id="sim-play-btn" class="sim-btn" title="Play Shift Simulation" aria-label="Play Shift Simulation">
-          ▶️
+      <aside id="journey" class="map-panel journey" hidden aria-label="Driver journey">
+        <header class="journey-head">
+          <span id="journey-avatar" class="avatar"></span>
+          <div class="journey-who">
+            <div id="journey-driver" class="journey-name"></div>
+            <div id="journey-truck" class="muted small"></div>
+          </div>
+          <button id="journey-close" class="icon-btn" title="Close" aria-label="Close journey">
+            <svg width="14" height="14" viewBox="0 0 14 14" stroke="currentColor" stroke-width="1.5"><path d="M3 3l8 8M11 3l-8 8"/></svg>
+          </button>
+        </header>
+        <dl class="journey-stats">
+          <div><dt>Stops</dt><dd id="journey-stops">–</dd></div>
+          <div><dt>Distance</dt><dd id="journey-km">–</dd></div>
+          <div><dt>Shift</dt><dd id="journey-time">–</dd></div>
+          <div><dt>Load</dt><dd id="journey-load">–</dd></div>
+        </dl>
+        <div class="journey-actions">
+          <button id="journey-play" class="btn btn-sm">Play journey</button>
+          <span id="journey-status" class="muted small"></span>
+        </div>
+        <ol id="journey-timeline" class="timeline"></ol>
+      </aside>
+
+      <div class="map-panel sim" id="sim-dock">
+        <button id="sim-play-btn" class="icon-btn" title="Play shift" aria-label="Play shift" disabled>
+          <svg class="i-play" width="14" height="14" viewBox="0 0 14 14"><path d="M3 1.5v11l9-5.5z" fill="currentColor"/></svg>
+          <svg class="i-pause" width="14" height="14" viewBox="0 0 14 14"><path d="M3 1.5h3v11H3zM8 1.5h3v11H8z" fill="currentColor"/></svg>
         </button>
-        <span id="sim-time-label" style="font-size:12px; font-weight:600; color:var(--text-main); white-space:nowrap;">
-          Shift: 0h 0m (0%)
-        </span>
-        <input type="range" id="sim-progress-slider" class="sim-slider" min="0" max="100" value="0">
-        <select id="sim-speed-select" class="form-select" style="padding:2px 6px; font-size:11px; width:65px;">
-          <option value="1">1x</option>
-          <option value="2">2x</option>
-          <option value="5" selected>5x</option>
-          <option value="10">10x</option>
+        <input type="range" id="sim-progress-slider" min="0" max="100" value="0" disabled>
+        <span id="sim-time-label" class="mono small">0h 00m</span>
+        <select id="sim-speed-select" aria-label="Playback speed">
+          <option value="1">1×</option>
+          <option value="2">2×</option>
+          <option value="5" selected>5×</option>
+          <option value="10">10×</option>
         </select>
       </div>
     </main>
-
   </div>
 
-  <!-- Toast Notifications Container -->
-  <div id="toast-container" class="toast-container"></div>
+  <div id="toast-container" class="toasts" aria-live="polite"></div>
 
-  <!-- Leaflet JS & MarkerCluster JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
-  <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
-  <!-- Main Application ES Module -->
   <script type="module" src="/static/js/app.js"></script>
-
 </body>
 </html>

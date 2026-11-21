@@ -170,7 +170,7 @@ class BaselineNearestNeighborSolver:
                 total_travel_time_s += (curr_time - (len(route_stop_indices) - 2) * 90)
                 vehicle_distances.append(route_dist / 1000.0)
 
-                r_fuel = compute_route_fuel(stop_details, distance_matrix, duration_matrix, v_cap)
+                r_fuel = compute_route_fuel(stop_details, distance_matrix, duration_matrix, float(v.get("fuel_ref_capacity_kg", v_cap)))
                 routes.append({
                     "vehicle_id": v_id,
                     "vehicle_name": v.get("name"),
